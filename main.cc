@@ -4,6 +4,8 @@
 
 using namespace std;
 
+mt19937 mt(12345);
+
 int PlusInf() {
   return numeric_limits<int>::max();
 }
@@ -12,16 +14,20 @@ int MinusInf() {
   return numeric_limits<int>::lowest();
 }
 
+template <typename Container>
+void Shuffle(Container* c) {
+  shuffle(c->begin(), c->end(), mt);
+}
+
 // inside [l; r]
 int GetRandomInt(int l, int r) {
   assert(l <= r);
-  static mt19937 mt;
   size_t next_token = mt();
   int len = r - l + 1;
   return l + next_token % len;
 }
 
-void GenAllPossibleChoices(const vector<int>& limits, vector<int>* cur_cortege, vector<vector<int>>* res) {
+void GenAllPossibleChoicesRec(const vector<int>& limits, vector<int>* cur_cortege, vector<vector<int>>* res) {
   size_t cur_idx = cur_cortege->size();
   if (cur_idx == limits.size()) {
     res->emplace_back(*cur_cortege);
@@ -29,9 +35,16 @@ void GenAllPossibleChoices(const vector<int>& limits, vector<int>* cur_cortege, 
   }
   for (size_t cur_elem = 0; cur_elem < limits[cur_idx]; cur_elem++) {
     cur_cortege->emplace_back(cur_elem);
-    GenAllPossibleChoices(limits, cur_cortege, res);
+    GenAllPossibleChoicesRec(limits, cur_cortege, res);
     cur_cortege->pop_back();
   }
+}
+
+vector<vector<int>> GenAllPossibleChoices(const vector<int>& limits) {
+  vector<vector<int>> res;
+  vector<int> cortege;
+  GenAllPossibleChoicesRec(limits, &cortege, &res);
+  return res;
 }
 
 void PrintCosts(const vector<int>& costs) {
@@ -70,7 +83,7 @@ class LPSolver {
     }
 
     bool IsFeasible() {
-      cout << "Feasible check for " << inequalities_.size() <<  " inequalities" << endl;
+      // cout << "Feasible check for " << inequalities_.size() <<  " inequalities" << endl;
       ofstream out("ineq.txt");
       assert(out.is_open());
       for (size_t ineq_idx = 0; ineq_idx < inequalities_.size(); ++ineq_idx) {
@@ -134,15 +147,54 @@ class NashDigraph {
       turns_(turns),
       edges_(vector<vector<Edge>>(turns.size())),
       start_vertex_(start_vertex),
-      num_of_players_(num_of_players) {
+      num_of_players_(num_of_players),
+      num_of_edges_(0) {
+    }
+
+    void AdjustEmptyTurns() {
+      for (size_t v = 0; v < turns_.size(); ++v) {
+        int turn = turns_[v];
+        if (turn == -1) {
+          continue;
+        }
+        if (edges_[v].empty()) {
+          turns_[v] = -1;
+        }
+      }
     }
 
     void Preprocess() {
+      AdjustEmptyTurns();
       CalcAllPossiblePlayersStrategies();
+    }
+
+    void Print(bool with_costs) {
+      cout << turns_.size() << " " << num_of_edges_ << " " << num_of_players_ << " " << start_vertex_ << endl;
+      for (size_t turn_idx = 0; turn_idx < turns_.size(); ++turn_idx) {
+        cout << turns_[turn_idx] << " ";
+      }
+      cout << endl;
+      for (size_t v = 0; v < turns_.size(); ++v) {
+        for (const Edge& e : edges_[v]) {
+          cout << v << " " << e.finish;
+          if (with_costs) {
+            for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
+              cout << " " << e.cost[player_idx];
+            }
+          }
+          cout << endl;
+        }
+      }
+    }
+
+    void AddEmptyEdge(int v, int u, int edge_idx) {
+      vector<int> mock_costs(num_of_players_);
+      AddEdge(v, u, mock_costs, edge_idx);
     }
 
     void AddEdge(int v, int u, const vector<int>& costs, int edge_idx) {
       edges_[v].push_back(Edge{u, costs, edge_idx});
+      num_of_edges_++;
     }
 
     void AddEdgeCosts(const vector<int>& src, vector<int>* dst) {
@@ -161,8 +213,7 @@ class NashDigraph {
           player_own_vertices.emplace_back(v);
         }
       }
-      vector<int> tmp;
-      GenAllPossibleChoices(player_num_of_edges_limits, &tmp, &all_possible_players_strategies_[player_idx]);
+      all_possible_players_strategies_[player_idx] = GenAllPossibleChoices(player_num_of_edges_limits);
     }
 
     void CalcAllPossiblePlayersStrategies() {
@@ -199,13 +250,11 @@ class NashDigraph {
 
     int CountNumOfNE() {
       size_t n = turns_.size();
-      vector<int> tmp;
       vector<int> num_of_strategies_limits(num_of_players_);
       for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
         num_of_strategies_limits[player_idx] = all_possible_players_strategies_[player_idx].size();
       }
-      vector<vector<int>> all_possible_strategies_corteges;
-      GenAllPossibleChoices(num_of_strategies_limits, &tmp, &all_possible_strategies_corteges);
+      vector<vector<int>> all_possible_strategies_corteges =  GenAllPossibleChoices(num_of_strategies_limits);
       int total_num_of_corteges = all_possible_strategies_corteges.size();
       int num_of_corteges_in_ne = 0;
       //cout << "Total num of tuples of strategies: " << total_num_of_corteges << endl;
@@ -302,19 +351,18 @@ class NashDigraph {
       int cx, 
       int cy,
       vector<vector<int>>* is_cell_used, 
-      LPSolver* lp_solver,
-      bool is_max_improvement_unique
+      LPSolver* lp_solver
     ) {
-      cout << "Branch" << endl;
       int n = is_cell_used->size();
       int m = (*is_cell_used)[0].size();
       assert(cx < n);
       assert(cy < m);
+      ineq_sat_percentage_ = max(ineq_sat_percentage_, double(lp_solver->Size()) / (n * m));
       if ((*is_cell_used)[cx][cy]) {
         for (int tx = 0; tx < n; ++tx) {
           for (int ty = 0; ty < m; ++ty) {
             if (!(*is_cell_used)[tx][ty]) {
-              return SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, tx, ty, is_cell_used, lp_solver, is_max_improvement_unique);
+              return SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, tx, ty, is_cell_used, lp_solver);
             }
           }
         }
@@ -327,47 +375,37 @@ class NashDigraph {
         if (tx == cx) { 
           continue;
         }
-        if (is_max_improvement_unique) {
-          const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy].first;
-          if (best_linear_func.empty()) {
+        
+        const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy].first;
+        if (best_linear_func.empty()) {
+          continue;
+        }
+        for (int func_idx = 0; func_idx < n; ++func_idx) {
+          if (func_idx == tx) {
             continue;
           }
-          for (int func_idx = 0; func_idx < n; ++func_idx) {
-            if (func_idx == tx) {
+          AddInequality(linear_funcs_by_cell[func_idx][cy].first, linear_funcs_by_cell[tx][cy].first, lp_solver);
+        }
+        if (lp_solver->IsFeasible()) {
+          vector<pair<int, int>> colored_cells;
+          for (int wx = 0; wx < n; ++wx) {
+            if (wx == tx) {
               continue;
             }
-            AddInequality(linear_funcs_by_cell[func_idx][cy].first, linear_funcs_by_cell[tx][cy].first, lp_solver);
-          }
-          if (lp_solver->IsFeasible()) {
-            vector<pair<int, int>> colored_cells;
-            for (int wx = 0; wx < n; ++wx) {
-              if (wx == tx) {
-                continue;
-              }
-              if (!(*is_cell_used)[wx][cy]) {
-                colored_cells.emplace_back(wx, cy);
-                (*is_cell_used)[wx][cy] = 1;
-              }
-            }
-            bool branch_result = SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver, is_max_improvement_unique);
-            if (branch_result) {
-              return true;
-            }
-            for (const auto& colored_cell : colored_cells) {
-              (*is_cell_used)[colored_cell.first][colored_cell.second] = 0;
+            if (!(*is_cell_used)[wx][cy]) {
+              colored_cells.emplace_back(wx, cy);
+              (*is_cell_used)[wx][cy] = 1;
             }
           }
-        } else {
-          const vector<int>& cur_linear_func = linear_funcs_by_cell[cx][cy].first;
-          const vector<int>& next_linear_func = linear_funcs_by_cell[tx][cy].first;
-          bool can_be_improved = AddInequality(cur_linear_func, next_linear_func, lp_solver);
-          if (can_be_improved && lp_solver->IsFeasible()) {
-            bool branch_result = SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, tx, cy, is_cell_used, lp_solver, false);
-            if (branch_result) {
-              return true;
-            }
+          bool branch_result = SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver);
+          if (branch_result) {
+            return true;
+          }
+          for (const auto& colored_cell : colored_cells) {
+            (*is_cell_used)[colored_cell.first][colored_cell.second] = 0;
           }
         }
+      
         while (lp_solver->Size() != old_lp_solver_size) {
           lp_solver->PopInequality();
         } 
@@ -378,45 +416,33 @@ class NashDigraph {
         if (ty == cy) { 
           continue;
         }
-        if (is_max_improvement_unique) {
-          const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty].first;
-          if (best_linear_func.empty()) {
+        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty].first;
+        if (best_linear_func.empty()) {
+          continue;
+        }
+        for (int func_idx = 0; func_idx < m; ++func_idx) {
+          if (func_idx == ty) {
             continue;
           }
-          for (int func_idx = 0; func_idx < m; ++func_idx) {
-            if (func_idx == ty) {
+          AddInequality(linear_funcs_by_cell[cx][func_idx].first, linear_funcs_by_cell[cx][ty].first, lp_solver);
+        }
+        if (lp_solver->IsFeasible()) {
+          vector<pair<int, int>> colored_cells;
+          for (int wy = 0; wy < m; ++wy) {
+            if (wy == ty) {
               continue;
             }
-            AddInequality(linear_funcs_by_cell[cx][func_idx].first, linear_funcs_by_cell[cx][ty].first, lp_solver);
-          }
-          if (lp_solver->IsFeasible()) {
-            vector<pair<int, int>> colored_cells;
-            for (int wy = 0; wy < m; ++wy) {
-              if (wy == ty) {
-                continue;
-              }
-              if (!(*is_cell_used)[cx][wy]) {
-                colored_cells.emplace_back(cx, wy);
-                (*is_cell_used)[cx][wy] = 1;
-              }
-            }
-            bool branch_result = SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver, is_max_improvement_unique);
-            if (branch_result) {
-              return true;
-            }
-            for (const auto& colored_cell : colored_cells) {
-              (*is_cell_used)[colored_cell.first][colored_cell.second] = 0;
+            if (!(*is_cell_used)[cx][wy]) {
+              colored_cells.emplace_back(cx, wy);
+              (*is_cell_used)[cx][wy] = 1;
             }
           }
-        } else {
-          const vector<int>& cur_linear_func = linear_funcs_by_cell[cx][cy].first;
-          const vector<int>& next_linear_func = linear_funcs_by_cell[cx][ty].first;
-          bool can_be_improved = AddInequality(cur_linear_func, next_linear_func, lp_solver);
-          if (can_be_improved && lp_solver->IsFeasible()) {
-            bool branch_result = SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, cx, ty, is_cell_used, lp_solver, false);
-            if (branch_result) {
-              return true;
-            }
+          bool branch_result = SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver);
+          if (branch_result) {
+            return true;
+          }
+          for (const auto& colored_cell : colored_cells) {
+            (*is_cell_used)[colored_cell.first][colored_cell.second] = 0;
           }
         }
         while (lp_solver->Size() != old_lp_solver_size) {
@@ -427,13 +453,19 @@ class NashDigraph {
       return false;
     }
 
-    bool SolveTwoPlayersPositiveCosts(bool is_max_improvement_unique) {
+    double GetIneqSatPercentage() {
+      return ineq_sat_percentage_;
+    }
+
+    bool SolveTwoPlayersPositiveCosts() {
       assert(num_of_players_ == 2);
       int n = all_possible_players_strategies_[0].size();
       int m = all_possible_players_strategies_[1].size();
-      cerr << n << " " << m << endl;
-      char ch;
-      cin >> ch;
+      ineq_sat_percentage_ = 0.0;
+      cerr << "Num of strategies for players: " << n << " " << m << endl;
+      if (n == 0 || m == 0) {
+        return false;
+      }
       vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
       vector<vector<pair<vector<int>, vector<int>>>> linear_funcs_by_cell(
         n, 
@@ -450,7 +482,29 @@ class NashDigraph {
       }
       LPSolver lp_solver(num_of_edges_); // num of edges in actually num of variables
       // Conditions x_i > 0 are already accounted in 'lp_solver.py'
-      return SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, 0, 0, &is_pair_of_strategies_used, &lp_solver, is_max_improvement_unique);
+      return SolveTwoPlayersPositiveCostsRec(linear_funcs_by_cell, 0, 0, &is_pair_of_strategies_used, &lp_solver);
+    }
+
+    void Dfs(int cur_vertex, vector<int>* is_vertex_visited) {
+      (*is_vertex_visited)[cur_vertex] = 1;
+      for (const Edge& edge : edges_[cur_vertex]) {
+        int next_vertex = edge.finish;
+        if (!(*is_vertex_visited)[next_vertex]) {
+          Dfs(next_vertex, is_vertex_visited);
+        }
+      }
+    }
+
+    bool AreAllVerticesAccessibleFromStart() {
+      int n = turns_.size();
+      vector<int> is_vertex_visited(n);
+      Dfs(start_vertex_, &is_vertex_visited);
+      for (int v = 0; v < n; ++v) {
+        if (!is_vertex_visited[v]) {
+          return false;
+        }
+      }
+      return true;
     }
 
   private:
@@ -493,13 +547,120 @@ class NashDigraph {
     size_t num_of_edges_;
     vector<vector<vector<int>>> all_possible_players_strategies_;
     bool is_complete_; // are costs of edges added?
+    double ineq_sat_percentage_;
 };
+
+
+struct GraphId {
+  int cycle_size;
+  int path_size;
+  size_t build_path_choice_idx;
+  size_t connect_cycle_choice_idx;
+};
+
+void AddEdge(int v, int u, vector<pair<int, int>>* edges) {
+  edges->emplace_back(v, u);
+}
+
+bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, int offset, bool should_shuffle) {
+  double max_ineq_sat_percentage = 0.0;
+  vector<GraphId> graph_ids_to_check;
+  vector<vector<int>> choices_to_connect_with_cycle;
+  vector<vector<int>> choices_to_build_path;
+  for (int path_size = ps_lb; path_size <= ps_rb; ++path_size) {
+    vector<int> path_to_cycle_edges_ways_limits(path_size, (1 << cycle_size));
+    choices_to_connect_with_cycle = GenAllPossibleChoices(path_to_cycle_edges_ways_limits);
+    vector<int> path_to_path_edges_ways_limits(path_size);
+    for (int vertex_in_path = 1; vertex_in_path <= path_size; ++vertex_in_path) {
+      int num_of_vertices_at_right = path_size - vertex_in_path;
+      path_to_path_edges_ways_limits[vertex_in_path - 1] = (1 << num_of_vertices_at_right); 
+    }
+    choices_to_build_path = GenAllPossibleChoices(path_to_path_edges_ways_limits);
+    for (size_t build_path_choice_idx = 0; build_path_choice_idx < choices_to_build_path.size(); ++build_path_choice_idx) {
+      for (size_t cycle_choice_idx = 0; cycle_choice_idx < choices_to_connect_with_cycle.size(); ++cycle_choice_idx) {
+        graph_ids_to_check.emplace_back(GraphId{cycle_size, path_size, build_path_choice_idx, cycle_choice_idx});
+      }
+    }
+  }
+  if (should_shuffle) {
+    Shuffle(&graph_ids_to_check);
+  }
+  for (size_t graph_id_idx = offset; graph_id_idx < graph_ids_to_check.size(); ++graph_id_idx) {
+    const auto& graph_id = graph_ids_to_check[graph_id_idx];
+    int cycle_size = graph_id.cycle_size;
+    int path_size = graph_id.path_size;
+    size_t build_path_choice_idx = graph_id.build_path_choice_idx;
+    size_t cycle_choice_idx = graph_id.connect_cycle_choice_idx;
+    const vector<int>& choice_to_build_path = choices_to_build_path[build_path_choice_idx];
+    const vector<int>& choice_to_connect_with_cycle = choices_to_connect_with_cycle[cycle_choice_idx];
+    cout << "Check graph for graph id " << graph_id_idx << endl;
+    int n = 1 + cycle_size + path_size;
+    vector<int> turns(n);
+    turns[0] = -1;
+    for (int i = 1; i <= cycle_size; ++i) {
+      turns[i] = i % 2;
+    }
+    for (int vertex_idx = cycle_size + 1; vertex_idx < n; ++vertex_idx) {
+      turns[vertex_idx] = 0;
+    }
+    vector<pair<int, int>> edges;
+    // Edges on path
+    for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
+      int nghbr_mask = choice_to_build_path[vertex_in_path];
+      for (int next_vertex_num = vertex_in_path + 1; next_vertex_num < path_size; ++next_vertex_num) {
+        int bit_pos = path_size - next_vertex_num - 1;
+        int is_connected = (nghbr_mask >> bit_pos) & 1;
+        if (is_connected) {
+          AddEdge(cycle_size + 1 + vertex_in_path, cycle_size + 1 + next_vertex_num, &edges);
+          turns[cycle_size + 1 + next_vertex_num] = (turns[cycle_size + 1 + vertex_in_path] ^ 1);
+        }
+      }
+    }
+    // Edges from path to cycle
+    for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
+      int cycle_mask = choice_to_connect_with_cycle[vertex_in_path];
+      for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
+        int is_connected = (cycle_mask >> vertex_in_cycle) & 1;
+        if (is_connected) {
+          AddEdge(cycle_size + 1 + vertex_in_path, vertex_in_cycle + 1, &edges);
+        }
+      }
+    }
+    // Edges on cycle
+    
+    for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
+      int next_vertex_in_cycle = (vertex_in_cycle + 1) % cycle_size;
+      AddEdge(vertex_in_cycle + 1, next_vertex_in_cycle + 1, &edges);
+      AddEdge(vertex_in_cycle + 1, 0, &edges);
+    }
+
+    NashDigraph G(turns, 2, cycle_size + 1);
+    for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
+      G.AddEmptyEdge(edges[edge_idx].first, edges[edge_idx].second, edge_idx);
+    }
+    if (!G.AreAllVerticesAccessibleFromStart()) {
+      cerr << "This graph will be skipped, as not all vertices are accessible from start" << endl;
+      continue;
+    }
+    G.Print(false);
+    G.Preprocess();
+    bool g_res = G.SolveTwoPlayersPositiveCosts();
+    max_ineq_sat_percentage = max(max_ineq_sat_percentage, G.GetIneqSatPercentage());
+    cout << "Current max inequality saturation percentage: " << max_ineq_sat_percentage << endl;
+    if (g_res) {
+      return true;
+    }
+  }
+  return false;
+}
 
 int main() {
     //freopen("input.txt", "r", stdin);
-    NashDigraph G("input.txt", false);
-    cout << G.SolveTwoPlayersPositiveCosts(true) << endl;
+    // NashDigraph G("input.txt", false);
+    // cout << G.AreAllVerticesAccessibleFromStart() << endl;
+    //cout << G.SolveTwoPlayersPositiveCosts() << endl;
+    //cout << G.GetIneqSatPercentage() << endl;
     //cout << G.CountNumOfNE() << endl;
-
+    cout << TryToSolve(2, 2, 6, 0, false);
     return 0;
 }

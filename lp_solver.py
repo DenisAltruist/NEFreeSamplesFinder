@@ -2,8 +2,6 @@ from scipy.optimize import linprog
 import numpy as np
 
 def is_feasible_positive(A, b):
-  print(A)
-  print(b)
   num_of_variables = len(A[0])
   bounds_to_apply = []
   for _ in range (0, num_of_variables):
@@ -11,7 +9,6 @@ def is_feasible_positive(A, b):
 
   c = np.zeros(num_of_variables)
   res=linprog(c=c.tolist(), A_ub=A.tolist(),b_ub=b.tolist(), bounds=bounds_to_apply)
-  print(res)
   if res['success'] == True:
     return 1
   return 0
