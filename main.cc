@@ -1,10 +1,58 @@
-#pragma comment(linker, "/STACK: 2000000")
+// -I/usr/include/python2.7/ -lpython2.7
 
 #include <bits/stdc++.h>
+#include <Python.h>
 
 using namespace std;
 
 mt19937 mt(12345);
+
+class TimeCounter {
+ public:
+  enum TimeUnits {
+    kMicrosecs,
+    kMillisecs,
+    kSeconds
+  };
+ private:
+  std::chrono::time_point<std::chrono::steady_clock> start_time_;
+  TimeUnits time_unit_;
+  bool running;
+  static const auto now() {
+    return std::chrono::steady_clock::now();
+  }
+ public:
+  TimeCounter() : time_unit_(kMillisecs), running(false) {};
+  explicit TimeCounter(TimeUnits timeUnit) : time_unit_(timeUnit), running(false) {};
+  void start() {
+    start_time_ = now();
+    running = true;
+  }
+  double finish() {
+    if (!running) {
+      assert(0);
+    }
+    running = false;
+    const std::chrono::time_point<std::chrono::steady_clock> endTime = now();
+    switch (time_unit_) {
+      case kMicrosecs: {
+        const std::chrono::duration<double, std::micro> elapsedTime = endTime - start_time_;
+        return elapsedTime.count();
+      }
+      case kMillisecs: {
+        const std::chrono::duration<double, std::milli> elapsedTime = endTime - start_time_;
+        return elapsedTime.count();
+      }
+      case kSeconds: {
+        const std::chrono::duration<double, std::ratio<1>> elapsedTime = endTime - start_time_;
+        return elapsedTime.count();
+      }
+      default: {
+        assert(0);
+      }
+    }
+  }
+};
 
 int PlusInf() {
   return numeric_limits<int>::max();
@@ -66,6 +114,28 @@ struct Edge {
 
 class LPSolver {
   public:
+    static void LaunchPython() {
+      Py_Initialize();
+
+      PyRun_SimpleString("import sys");
+      PyRun_SimpleString("import os");
+      PyRun_SimpleString("sys.path.append(os.getcwd())");
+
+      PyObject* p_name = PyString_FromString("lp_solver");
+      CheckPyObjectFailure(p_name);
+
+      PyObject* p_module = PyImport_Import(p_name);
+      CheckPyObjectFailure(p_module);
+
+      PyObject* p_dict = PyModule_GetDict(p_module);
+      CheckPyObjectFailure(p_dict);
+
+      PyObject* p_func = PyDict_GetItemString(p_dict, "is_feasible_positive");
+      CheckPyObjectFailure(p_func);
+
+      feasibility_func_ = p_func;
+    }
+
     LPSolver(int num_of_variables) : num_of_variables_(num_of_variables) {}
 
     void PushInequality(const vector<int>& coeffs) { // last coeff is number after comparison sing. a_1x_1 + ... + a_nx_n <= c
@@ -84,31 +154,68 @@ class LPSolver {
 
     bool IsFeasible() {
       // cout << "Feasible check for " << inequalities_.size() <<  " inequalities" << endl;
-      ofstream out("ineq.txt");
-      assert(out.is_open());
+      if (inequalities_.empty()) {
+        return true;
+      }
+      TimeCounter feasibility_check_timer(TimeCounter::kSeconds);
+      feasibility_check_timer.start(); // 0.1 for check with files and shell call.
+      PyObject* p_args = PyTuple_New(2);
+      vector<int> bounds(inequalities_.size());
+
+      cout << inequalities_.size() * num_of_variables_ << endl;
+
       for (size_t ineq_idx = 0; ineq_idx < inequalities_.size(); ++ineq_idx) {
-        for (size_t variable_idx = 0; variable_idx <= num_of_variables_; ++variable_idx) {
-          out << inequalities_[ineq_idx][variable_idx] << " ";
-        }
-        out << "\n";
+        bounds[ineq_idx] = inequalities_[ineq_idx][num_of_variables_];
+        inequalities_[ineq_idx].resize(num_of_variables_ - 1);
       }
-      out.close();
-      int ret_code = system("python lp_solver.py");
-      assert(ret_code >= 0);
-      ifstream res_file("res.txt");
-      assert(res_file.is_open());
-      int res_flag;
-      res_file >> res_flag;
-      if (res_flag == -1) {
-        cout << "WARNING! Bad res flag" << endl;
+
+      PyObject* call_result = PyObject_CallObject(feasibility_func_, p_args);
+      CheckPyObjectFailure(call_result);
+
+      int res = PyInt_AsLong(call_result);
+      cout << feasibility_check_timer.finish() << endl;
+
+      for (size_t ineq_idx = 0; ineq_idx < inequalities_.size(); ++ineq_idx) {
+        inequalities_[ineq_idx].resize(num_of_variables_);
       }
-      return (res_flag == 1);
+
+      return res;
     }
 
   private:
+    static PyObject* feasibility_func_;
+
+    PyObject* ineq_matrix_;
+    PyObject* bounds_;
+
+    static void CheckPyObjectFailure(PyObject* object) {
+      if (object == nullptr) {
+        PyErr_Print();
+        exit(1);
+      }
+    }
+
+    PyObject* PListFromVector(const vector<int>& nums) {
+      PyObject* l = PyList_New(nums.size());
+      for (size_t i = 0; i < nums.size(); ++i) {
+        PyList_SET_ITEM(l, i, PyInt_FromLong(nums[i]));
+      }
+      return l;
+    }
+
+    PyObject* PMatrixFromVector(const vector<vector<int>>& matrix) {
+      PyObject* l = PyList_New(matrix.size());
+      for (size_t i = 0; i < matrix.size(); ++i) {
+        PyList_SET_ITEM(l, i, PListFromVector(matrix[i]));
+      }
+      return l;
+    }
+
     int num_of_variables_;
     vector<vector<int>> inequalities_; // the form of each inequality: a_1x_1 + a_2x_2 + ... + a_nx_n >= 0
 };
+
+PyObject* LPSolver::feasibility_func_ = nullptr;
 
 class NashDigraph {
   public:
@@ -562,20 +669,41 @@ void AddEdge(int v, int u, vector<pair<int, int>>* edges) {
   edges->emplace_back(v, u);
 }
 
-bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, int offset, bool should_shuffle) {
+int num_of_bits(int x) {
+  return __builtin_popcount(x);
+}
+
+bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, int max_num_of_edges_from_path_to_cycle, int offset, bool should_shuffle) {
   double max_ineq_sat_percentage = 0.0;
   vector<GraphId> graph_ids_to_check;
   vector<vector<int>> choices_to_connect_with_cycle;
   vector<vector<int>> choices_to_build_path;
   for (int path_size = ps_lb; path_size <= ps_rb; ++path_size) {
+
     vector<int> path_to_cycle_edges_ways_limits(path_size, (1 << cycle_size));
     choices_to_connect_with_cycle = GenAllPossibleChoices(path_to_cycle_edges_ways_limits);
+    vector<vector<int>> sifted_cycle_choices; // at most 'max_num_of_edges_from_path_to_cycle' edges
+    for (const vector<int>& cycle_choice : choices_to_connect_with_cycle) {
+      bool is_bad = false;
+      for (int x : cycle_choice) {
+        if (num_of_bits(x) > max_num_of_edges_from_path_to_cycle) {
+          is_bad = true;
+          break;
+        }
+      }
+      if (!is_bad) {
+        sifted_cycle_choices.emplace_back(cycle_choice);
+      }
+    }
+    choices_to_connect_with_cycle = sifted_cycle_choices;
+
     vector<int> path_to_path_edges_ways_limits(path_size);
     for (int vertex_in_path = 1; vertex_in_path <= path_size; ++vertex_in_path) {
       int num_of_vertices_at_right = path_size - vertex_in_path;
       path_to_path_edges_ways_limits[vertex_in_path - 1] = (1 << num_of_vertices_at_right); 
     }
     choices_to_build_path = GenAllPossibleChoices(path_to_path_edges_ways_limits);
+
     for (size_t build_path_choice_idx = 0; build_path_choice_idx < choices_to_build_path.size(); ++build_path_choice_idx) {
       for (size_t cycle_choice_idx = 0; cycle_choice_idx < choices_to_connect_with_cycle.size(); ++cycle_choice_idx) {
         graph_ids_to_check.emplace_back(GraphId{cycle_size, path_size, build_path_choice_idx, cycle_choice_idx});
@@ -655,12 +783,18 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, int offset, bool should_sh
 }
 
 int main() {
+    LPSolver::LaunchPython();
     //freopen("input.txt", "r", stdin);
-    // NashDigraph G("input.txt", false);
+    NashDigraph G("input.txt", false);
     // cout << G.AreAllVerticesAccessibleFromStart() << endl;
-    //cout << G.SolveTwoPlayersPositiveCosts() << endl;
+    cout << G.SolveTwoPlayersPositiveCosts() << endl;
     //cout << G.GetIneqSatPercentage() << endl;
     //cout << G.CountNumOfNE() << endl;
-    cout << TryToSolve(2, 2, 6, 0, false);
+    /*
+      2, 3, 6, 3, ..., true => offset = 75
+    */
+    //cout << TryToSolve(2, 3, 3, 3, 0, true);
+
+    Py_Finalize();
     return 0;
 }

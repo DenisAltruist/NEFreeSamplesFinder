@@ -1,4 +1,5 @@
 from scipy.optimize import linprog
+import datetime
 import numpy as np
 
 def is_feasible_positive(A, b):
@@ -8,17 +9,7 @@ def is_feasible_positive(A, b):
     bounds_to_apply.append((1, None))
 
   c = np.zeros(num_of_variables)
-  res=linprog(c=c.tolist(), A_ub=A.tolist(),b_ub=b.tolist(), bounds=bounds_to_apply)
+  res=linprog(c=c.tolist(), A_ub=A,b_ub=b, bounds=bounds_to_apply)
   if res['success'] == True:
     return 1
   return 0
-
-def main(A):
-  ans = is_feasible_positive(A[:,:-1], A[:,-1])
-  out = open("res.txt", "w")
-  out.write(str(ans))
-  out.close()
-
-if __name__ == "__main__":
-  A = np.loadtxt("ineq.txt")
-  main(A)
