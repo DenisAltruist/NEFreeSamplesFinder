@@ -116,7 +116,7 @@ class LPSolver {
   public:
     static void LaunchPython() {
       Py_Initialize();
-
+  
       PyRun_SimpleString("import sys");
       PyRun_SimpleString("import os");
       PyRun_SimpleString("sys.path.append(os.getcwd())");
@@ -130,13 +130,77 @@ class LPSolver {
       PyObject* p_dict = PyModule_GetDict(p_module);
       CheckPyObjectFailure(p_dict);
 
-      PyObject* p_func = PyDict_GetItemString(p_dict, "is_feasible_positive");
-      CheckPyObjectFailure(p_func);
+      feasibility_func_ = PyDict_GetItemString(p_dict, "is_feasible");
+      CheckPyObjectFailure(feasibility_func_);
 
-      feasibility_func_ = p_func;
+      sol_func_ = PyDict_GetItemString(p_dict, "solve");
+      CheckPyObjectFailure(sol_func_);
     }
 
+    static void ReleasePython() {
+      Py_Finalize();
+    }
+
+    LPSolver() = default;
+
     LPSolver(int num_of_variables) : num_of_variables_(num_of_variables) {}
+
+    vector<double> GetSolution() {
+      vector<double> res_list;
+      PyObject* res = CallCvxopt(sol_func_);
+      PyObject* first_res = PyTuple_GetItem(res, 0);
+      PyObject* second_res = PyTuple_GetItem(res, 1);
+      int sol_len = PyObject_Length(second_res);
+      for (int i = 0; i < sol_len; ++i) {
+        PyObject* item = PyList_GetItem(second_res, i);
+        CheckPyObjectFailure(item);
+        PyObject* item2 = PyList_GetItem(item, 0);
+        CheckPyObjectFailure(item2);
+        res_list.emplace_back(PyFloat_AsDouble(item2));
+      }
+      return res_list;
+    }
+
+    vector<int> GetIntSolution() {
+      vector<int> res(num_of_variables_);
+      vector<double> reg_sol = GetSolution();
+      for (int mask = 0; mask < (1 << num_of_variables_); mask++) {
+        vector<double> trial(num_of_variables_);
+        for (int bit_pos = num_of_variables_ - 1; bit_pos >= 0; --bit_pos) {
+          int bit = (mask >> bit_pos) & 1;
+          if (bit) {
+            res[bit_pos] = int(reg_sol[bit_pos] + 1);
+          } else {
+            res[bit_pos] = int(reg_sol[bit_pos]);
+          }
+          trial[bit_pos] = res[bit_pos];
+        }
+        if (CheckSolution(trial)) {
+          return res;
+        } else {
+          res.clear();
+        }
+      }
+      assert(1 == 0);
+    }
+
+    bool CheckSolution(vector<double> sol) {
+      assert(sol.size() == num_of_variables_);
+      vector<double> sums(Size(), 0.0);
+      bool is_ok = true;
+      for (size_t x_coord = 0; x_coord < sparse_ineqs_.size(); ++x_coord) {
+        for (auto& pair : sparse_ineqs_[x_coord]) {
+          size_t y_coord = pair.first;
+          int val = pair.second;
+          sums[x_coord] += sol[y_coord] * val;
+        }
+      }
+      
+      for (size_t sum_idx = 0; sum_idx < sums.size(); ++sum_idx) {
+        is_ok &= (sums[sum_idx] <= bounds_[sum_idx]);
+      }
+      return is_ok;
+    }
 
     void PushInequality(const vector<pair<int, int>>& sparse_ineq, int bound) { // last coeff is number after comparison sing. a_1x_1 + ... + a_nx_n <= c
       sparse_ineqs_.emplace_back(sparse_ineq);
@@ -154,14 +218,36 @@ class LPSolver {
       return bounds_.size();
     }
 
-    bool IsFeasible() {
-      if (bounds_.empty()) {
-        return true;
+    bool IsFeasible(bool should_print_ineq = false) {
+      if (should_print_ineq) {
+        vector<vector<int>> m(sparse_ineqs_.size(), vector<int>(num_of_variables_));
+        for (size_t x = 0; x < sparse_ineqs_.size(); ++x) {
+          for (auto& P : sparse_ineqs_[x]) {
+            m[x][P.first] = P.second;
+          }
+        }
+        for (size_t i = 0; i < sparse_ineqs_.size(); ++i) {
+          for (size_t j = 0; j < num_of_variables_; ++j) {
+            cout << m[i][j] << " ";
+          }
+          cout << endl;
+        }
       }
+      return PyInt_AsLong(CallCvxopt(feasibility_func_));
+    }
+
+  private:
+    static PyObject* feasibility_func_;
+    static PyObject* sol_func_;
+
+    PyObject* CallCvxopt(PyObject* call_function) {
       //TimeCounter feasibility_check_timer(TimeCounter::kSeconds);
       //feasibility_check_timer.start(); // 0.1 for check with files and shell call.
       PyObject* p_args = PyTuple_New(5);
       
+
+      assert(!sparse_ineqs_.empty());
+      assert(!bounds_.empty());
       vector<int> x_coords, y_coords, values;
       for (size_t ineq_idx = 0; ineq_idx < sparse_ineqs_.size(); ++ineq_idx) {
         for (size_t val_idx = 0; val_idx < sparse_ineqs_[ineq_idx].size(); ++val_idx) {
@@ -176,15 +262,13 @@ class LPSolver {
       PyTuple_SetItem(p_args, 3, PListFromVector(bounds_, "double"));
       PyTuple_SetItem(p_args, 4, PyInt_FromLong(num_of_variables_));
 
-      PyObject* call_result = PyObject_CallObject(feasibility_func_, p_args);
+      PyObject* call_result = PyObject_CallObject(call_function, p_args);
+
+      Py_DECREF(p_args);
+
       CheckPyObjectFailure(call_result);
-
-      //cout << feasibility_check_timer.finish() << endl;
-      return PyInt_AsLong(call_result);
+      return call_result;
     }
-
-  private:
-    static PyObject* feasibility_func_;
 
     static void CheckPyObjectFailure(PyObject* object) {
       if (object == nullptr) {
@@ -219,6 +303,15 @@ class LPSolver {
 };
 
 PyObject* LPSolver::feasibility_func_ = nullptr;
+PyObject* LPSolver::sol_func_ = nullptr;
+
+
+void PrintVec(const vector<int>& v) {
+  for (size_t i = 0; i < v.size(); ++i) {
+    cout << v[i] << " ";
+  }
+  cout << endl;
+}
 
 class NashDigraph {
   public:
@@ -250,6 +343,7 @@ class NashDigraph {
       num_of_players_ = num_of_players;
       num_of_edges_ = num_of_edges;
       Preprocess();
+      is_limited_by_iters_ = false;
     }
 
     // For this constructor edges should be added manually
@@ -259,6 +353,7 @@ class NashDigraph {
       start_vertex_(start_vertex),
       num_of_players_(num_of_players),
       num_of_edges_(0) {
+        is_limited_by_iters_ = false;
     }
 
     void AdjustEmptyTurns() {
@@ -286,7 +381,7 @@ class NashDigraph {
       cout << endl;
       for (size_t v = 0; v < turns_.size(); ++v) {
         for (const Edge& e : edges_[v]) {
-          cout << v << " " << e.finish;
+          cout << v << " " << e.finish << " " << e.idx;
           if (with_costs) {
             for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
               cout << " " << e.cost[player_idx];
@@ -358,13 +453,42 @@ class NashDigraph {
       }
     }
 
+    void CheckCorrectness() {
+      vector<pair<int, int>> sol = GetSolution();
+      for (size_t v = 0; v < turns_.size(); ++v) {
+        for (auto& edge : edges_[v]) {
+          cout << sol[edge.idx].first << " " << sol[edge.idx].second << endl;
+          edge.cost = vector<int>({sol[edge.idx].first, sol[edge.idx].second});
+        }
+      }
+      is_complete_ = true;
+      int n = all_possible_players_strategies_[0].size();
+      int m = all_possible_players_strategies_[1].size();
+      int num_of_ne = 0;
+      for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < m; ++j) {
+          vector<size_t> all_player_strategy(turns_.size());
+          ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][i], 0, &all_player_strategy);
+          ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][j], 1, &all_player_strategy);
+          bool is_pos_in_ne = IsStrategyNE(all_player_strategy);
+          if (best_cells_cover_matrix_[i][j]) {
+            assert(!is_pos_in_ne);
+          }
+          num_of_ne += is_pos_in_ne;
+        }
+      }
+      int num_of_saturated_cells = ineq_sat_percentage_ *  n * m;
+      cout << n * m - num_of_ne << " " << num_of_saturated_cells << endl;
+      is_complete_ = false;
+    }
+
     int CountNumOfNE() {
       size_t n = turns_.size();
       vector<int> num_of_strategies_limits(num_of_players_);
       for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
         num_of_strategies_limits[player_idx] = all_possible_players_strategies_[player_idx].size();
       }
-      vector<vector<int>> all_possible_strategies_corteges =  GenAllPossibleChoices(num_of_strategies_limits);
+      vector<vector<int>> all_possible_strategies_corteges = GenAllPossibleChoices(num_of_strategies_limits);
       int total_num_of_corteges = all_possible_strategies_corteges.size();
       int num_of_corteges_in_ne = 0;
       //cout << "Total num of tuples of strategies: " << total_num_of_corteges << endl;
@@ -405,33 +529,29 @@ class NashDigraph {
       return true;
     }
 
-    vector<vector<int>> GetLinFuncsForPlayersByGlobalStrategy(const vector<size_t>& all_players_strategy) {
-      vector<vector<int>> used_edges_by_player_idx(num_of_players_);
+    vector<int> GetLinFuncsForPlayersByGlobalStrategy(const vector<size_t>& all_players_strategy) {
       size_t curv = start_vertex_;
       vector<int> is_vertex_used(turns_.size());
+      vector<int> used_edges;
       while (!is_vertex_used[curv] && turns_[curv] != -1) {
         is_vertex_used[curv] = 1;
         assert(curv < all_players_strategy.size());
         size_t index_of_edge_to_use = all_players_strategy[curv];
         assert(index_of_edge_to_use < edges_[curv].size());
         size_t nextv = edges_[curv][index_of_edge_to_use].finish;
-        assert(turns_[curv] < used_edges_by_player_idx.size());
-        used_edges_by_player_idx[turns_[curv]].emplace_back(edges_[curv][index_of_edge_to_use].idx); 
+        used_edges.emplace_back(edges_[curv][index_of_edge_to_use].idx);
         curv = nextv;
-        assert(curv < turns_.size());
       }
       if (is_vertex_used[curv]) { // got cycle
-        return vector<vector<int>>(num_of_players_); 
+        used_edges.clear();
+        return used_edges;
       }
-      for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
-        vector<int> res(num_of_edges_);
-        for (size_t edge_idx : used_edges_by_player_idx[player_idx]) {
-          assert(edge_idx < num_of_edges_);
-          res[edge_idx] = 1;
-        }
-        used_edges_by_player_idx[player_idx] = res;
+      vector<int> res(num_of_edges_);
+      for (size_t edge_idx : used_edges) {
+        assert(edge_idx < num_of_edges_);
+        res[edge_idx] = 1;
       }
-      return used_edges_by_player_idx;
+      return res;
     }
     
     // returns true if improved by addition
@@ -461,8 +581,8 @@ class NashDigraph {
       return true;
     }
 
-    bool SolveTwoPlayersCostsRec(
-      const vector<vector<pair<vector<int>, vector<int>>>>& linear_funcs_by_cell,
+    bool GoFirstPlayer(
+      const vector<vector<vector<int>>>& linear_funcs_by_cell,
       int cx, 
       int cy,
       vector<vector<int>>* is_cell_used, 
@@ -470,29 +590,6 @@ class NashDigraph {
       LPSolver* lp_solver_second_player
     ) {
       int n = is_cell_used->size();
-      int m = (*is_cell_used)[0].size();
-      assert(cx < n);
-      assert(cy < m);
-      size_t num_of_used_cells = 0;
-      for (size_t wx = 0; wx < n; ++wx) {
-        for (size_t wy = 0; wy < m; ++wy) {
-          if ((*is_cell_used)[wx][wy]) {
-            num_of_used_cells++;
-          }
-        }
-      }
-      ineq_sat_percentage_ = max(ineq_sat_percentage_, double(num_of_used_cells) / (n * m));
-      if ((*is_cell_used)[cx][cy]) {
-        for (int tx = 0; tx < n; ++tx) {
-          for (int ty = 0; ty < m; ++ty) {
-            if (!(*is_cell_used)[tx][ty]) {
-              return SolveTwoPlayersCostsRec(linear_funcs_by_cell, tx, ty, is_cell_used, lp_solver_first_player, lp_solver_second_player);
-            }
-          }
-        }
-        return true;
-      }
-      (*is_cell_used)[cx][cy] = 1;
       // finding cell to improve for the first player
       for (int tx = 0; tx < n; ++tx) {
         size_t old_lp_solver_size = lp_solver_first_player->Size();
@@ -500,7 +597,7 @@ class NashDigraph {
           continue;
         }
         
-        const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy].first;
+        const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy];
         if (best_linear_func.empty()) {
           continue;
         }
@@ -508,7 +605,7 @@ class NashDigraph {
           if (func_idx == tx) {
             continue;
           }
-          AddInequality(linear_funcs_by_cell[func_idx][cy].first, linear_funcs_by_cell[tx][cy].first, lp_solver_first_player);
+          AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], lp_solver_first_player);
         }
         if (lp_solver_first_player->IsFeasible()) {
           vector<pair<int, int>> colored_cells;
@@ -534,13 +631,25 @@ class NashDigraph {
           lp_solver_first_player->PopInequality();
         } 
       }
+      return false;
+    }
+
+    bool GoSecondPlayer(
+      const vector<vector<vector<int>>>& linear_funcs_by_cell,
+      int cx, 
+      int cy,
+      vector<vector<int>>* is_cell_used, 
+      LPSolver* lp_solver_first_player,
+      LPSolver* lp_solver_second_player
+    ) {
+      int m = (*is_cell_used)[0].size();
       // finding cell to improve for the second player
       for (int ty = 0; ty < m; ++ty) {
          size_t old_lp_solver_size = lp_solver_second_player->Size();
         if (ty == cy) { 
           continue;
         }
-        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty].first;
+        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty];
         if (best_linear_func.empty()) {
           continue;
         }
@@ -548,7 +657,7 @@ class NashDigraph {
           if (func_idx == ty) {
             continue;
           }
-          AddInequality(linear_funcs_by_cell[cx][func_idx].first, linear_funcs_by_cell[cx][ty].first, lp_solver_second_player);
+          AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], lp_solver_second_player);
         }
         if (lp_solver_second_player->IsFeasible()) {
           vector<pair<int, int>> colored_cells;
@@ -573,8 +682,71 @@ class NashDigraph {
           lp_solver_second_player->PopInequality();
         } 
       }
-      (*is_cell_used)[cx][cy] = 0;
       return false;
+    }
+
+    bool SolveTwoPlayersCostsRec(
+      const vector<vector<vector<int>>>& linear_funcs_by_cell,
+      int cx, 
+      int cy,
+      vector<vector<int>>* is_cell_used, 
+      LPSolver* lp_solver_first_player,
+      LPSolver* lp_solver_second_player
+    ) {
+      if (is_limited_by_iters_) {
+        if (num_of_transmissions_limit_ <= 0) {
+          return false;
+        }
+        num_of_transmissions_limit_--;
+      }
+      int n = is_cell_used->size();
+      int m = (*is_cell_used)[0].size();
+      assert(cx < n);
+      assert(cy < m);
+      size_t num_of_used_cells = 0;
+      for (size_t wx = 0; wx < n; ++wx) {
+        for (size_t wy = 0; wy < m; ++wy) {
+          if ((*is_cell_used)[wx][wy]) {
+            num_of_used_cells++;
+          }
+        }
+      }
+      double sat_percentage_ = double(num_of_used_cells) / (n * m);
+      cout << "Branch percentage: " << sat_percentage_ << endl;
+      if (sat_percentage_ > ineq_sat_percentage_) {
+        ineq_sat_percentage_ = sat_percentage_;
+        best_solver_first_player_ = *lp_solver_first_player;
+        best_solver_second_player_ = *lp_solver_second_player;
+        best_cells_cover_matrix_ = *is_cell_used;
+      }
+      ineq_sat_percentage_ = sat_percentage_;
+      if ((*is_cell_used)[cx][cy]) {
+        for (int tx = 0; tx < n; ++tx) {
+          for (int ty = 0; ty < m; ++ty) {
+            if (!(*is_cell_used)[tx][ty]) {
+              return SolveTwoPlayersCostsRec(linear_funcs_by_cell, tx, ty, is_cell_used, lp_solver_first_player, lp_solver_second_player);
+            }
+          }
+        }
+        return true;
+      }
+      (*is_cell_used)[cx][cy] = 1;
+      // randomizing branch's order
+      int branch_order = GetRandomInt(0, 1);
+      if (branch_order) {
+        bool res = GoSecondPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver_first_player, lp_solver_second_player);
+        if (res) {
+          return true;
+        }
+        GoFirstPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver_first_player, lp_solver_second_player);
+      }
+      bool res = GoFirstPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver_first_player, lp_solver_second_player);
+      if (res) {
+        return true;
+      }
+      res = GoSecondPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_solver_first_player, lp_solver_second_player);
+      (*is_cell_used)[cx][cy] = 0;
+      return res;
     }
 
     double GetIneqSatPercentage() {
@@ -585,23 +757,22 @@ class NashDigraph {
       assert(num_of_players_ == 2);
       int n = all_possible_players_strategies_[0].size();
       int m = all_possible_players_strategies_[1].size();
-      ineq_sat_percentage_ = 0.0;
+      ineq_sat_percentage_ = -1.0;
       cerr << "Num of strategies for players: " << n << " " << m << endl;
       if (n == 0 || m == 0) {
         return false;
       }
       vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
-      vector<vector<pair<vector<int>, vector<int>>>> linear_funcs_by_cell(
+      vector<vector<vector<int>>> linear_funcs_by_cell(
         n, 
-        vector<pair<vector<int>, vector<int>>>(m) // if vector is empty, then both vectors should be empty and this is a cycle
+        vector<vector<int>>(m) // if vector is empty, then both vectors should be empty and this is a cycle
       );
       for (int cx = 0; cx < n; ++cx) {
         for (int cy = 0; cy < m; ++cy) {
           vector<size_t> all_players_strategy(turns_.size());
           ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
           ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
-          vector<vector<int>> lin_funcs = GetLinFuncsForPlayersByGlobalStrategy(all_players_strategy);
-          linear_funcs_by_cell[cx][cy] = make_pair(lin_funcs[0], lin_funcs[1]);
+          linear_funcs_by_cell[cx][cy] = GetLinFuncsForPlayersByGlobalStrategy(all_players_strategy);
         }
       }
       LPSolver lp_solver_first_player(num_of_edges_); // num of edges in actually num of variables
@@ -625,6 +796,16 @@ class NashDigraph {
       }
     }
 
+    vector<pair<int, int>> GetSolution() {
+      vector<pair<int, int>> res;
+      vector<int> first_player_sol = best_solver_first_player_.GetIntSolution();
+      vector<int> second_player_sol = best_solver_second_player_.GetIntSolution();
+      for (size_t var_idx = 0; var_idx < first_player_sol.size(); ++var_idx) {
+        res.emplace_back(first_player_sol[var_idx], second_player_sol[var_idx]);
+      }
+      return res;
+    }
+
     bool AreAllVerticesAccessibleFromStart() {
       int n = turns_.size();
       vector<int> is_vertex_visited(n);
@@ -635,6 +816,11 @@ class NashDigraph {
         }
       }
       return true;
+    }
+
+    void SetTransmissionsLimit(int x) {
+      is_limited_by_iters_ = true;
+      num_of_transmissions_limit_ = x;
     }
 
   private:
@@ -670,6 +856,7 @@ class NashDigraph {
       return total_costs;
     }
 
+    int num_of_transmissions_limit_;
     vector<int> turns_; // each value is in [-1; num_of_players), where -1 denotes terminal vertex
     vector<vector<Edge>> edges_;
     size_t start_vertex_;
@@ -677,9 +864,12 @@ class NashDigraph {
     size_t num_of_edges_;
     vector<vector<vector<int>>> all_possible_players_strategies_;
     bool is_complete_; // are costs of edges added?
+    bool is_limited_by_iters_;
     double ineq_sat_percentage_;
+    LPSolver best_solver_first_player_; // used only for SolveTwoPlayersRec 
+    LPSolver best_solver_second_player_; // used only for SolveTwoPlayersRec
+    vector<vector<int>> best_cells_cover_matrix_; // used only for SolveTwoPlayersRec
 };
-
 
 struct GraphId {
   int cycle_size;
@@ -696,7 +886,38 @@ int num_of_bits(int x) {
   return __builtin_popcount(x);
 }
 
-bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int, int>>& limits, int offset, bool should_shuffle) {
+void GenAllPossibleChoicesForMasksRec(const vector<int>& limits, const vector<pair<int, int>>& bounds, vector<int>* cur_cortege, vector<vector<int>>* res) {
+  size_t idx = cur_cortege->size();
+  if (idx == limits.size()) {
+    res->emplace_back(*cur_cortege);
+    return;
+  }
+  for (size_t mask = 0; mask < limits[idx]; ++mask) {
+    int cur_num_of_bits = num_of_bits(mask);
+    if (cur_num_of_bits >= bounds[idx].first && cur_num_of_bits <= bounds[idx].second) {
+      cur_cortege->emplace_back(mask);
+      GenAllPossibleChoicesForMasksRec(limits, bounds, cur_cortege, res);
+      cur_cortege->pop_back();
+    }
+  }
+}
+
+vector<vector<int>> GenAllPossibleChoicesForMasks(const vector<int>& limits, const vector<pair<int, int>>& bounds) {
+  vector<vector<int>> res;
+  vector<int> tmp;
+  GenAllPossibleChoicesForMasksRec(limits, bounds, &tmp, &res);
+  return res;
+}
+
+bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int, int>>& bounds, const std::string& offset_filename, bool should_shuffle) {
+  ifstream in(offset_filename);
+  assert(in.is_open());
+  int offset = 0;
+  in >> offset;
+  in.close();
+
+  const size_t kDumpProgressPeriod = 10;
+  
   double max_ineq_sat_percentage = 0.0;
   vector<GraphId> graph_ids_to_check;
   vector<vector<int>> choices_to_connect_with_cycle;
@@ -704,27 +925,8 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
   for (int path_size = ps_lb; path_size <= ps_rb; ++path_size) {
 
     vector<int> path_to_cycle_edges_ways_limits(path_size, (1 << cycle_size));
-    choices_to_connect_with_cycle = GenAllPossibleChoices(path_to_cycle_edges_ways_limits);
-    vector<vector<int>> sifted_cycle_choices; // at most 'max_num_of_edges_from_path_to_cycle' edges
-    for (const vector<int>& cycle_choice : choices_to_connect_with_cycle) {
-      bool is_bad = false;
-      for (size_t vertex_on_path = 0; vertex_on_path < path_size; ++vertex_on_path) {
-        if (num_of_bits(cycle_choice[vertex_on_path] < limits[vertex_on_path].first)) {
-          is_bad = true;
-        }
-        if (num_of_bits(cycle_choice[vertex_on_path]) > limits[vertex_on_path].second) {
-          is_bad = true;
-        }
-        if (is_bad) {
-          break;
-        }
-      }
-      if (!is_bad) {
-        sifted_cycle_choices.emplace_back(cycle_choice);
-      }
-    }
-    choices_to_connect_with_cycle = sifted_cycle_choices;
-
+    choices_to_connect_with_cycle = GenAllPossibleChoicesForMasks(path_to_cycle_edges_ways_limits, bounds);
+   
     vector<int> path_to_path_edges_ways_limits(path_size);
     for (int vertex_in_path = 1; vertex_in_path <= path_size; ++vertex_in_path) {
       int num_of_vertices_at_right = path_size - vertex_in_path;
@@ -800,11 +1002,20 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     }
     G.Print(false);
     G.Preprocess();
+    //G.SetTransmissionsLimit(20);
     bool g_res = G.SolveTwoPlayersCosts(true);
+    G.CheckCorrectness();
     max_ineq_sat_percentage = max(max_ineq_sat_percentage, G.GetIneqSatPercentage());
     cout << "Current max inequality saturation percentage: " << max_ineq_sat_percentage << endl;
     if (g_res) {
       return true;
+    }
+    if (graph_id_idx % kDumpProgressPeriod == 0) {
+      ofstream out(offset_filename);
+      assert(out.is_open());
+      out << graph_id_idx << "\n";
+      out << max_ineq_sat_percentage << "\n";
+      out.close();
     }
   }
   return false;
@@ -813,17 +1024,18 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
 int main() {
     LPSolver::LaunchPython();
     //freopen("input.txt", "r", stdin);
-    //NashDigraph G("input.txt", false);
+    // NashDigraph G("input.txt", false);
     // cout << G.AreAllVerticesAccessibleFromStart() << endl;
-    //cout << G.SolveTwoPlayersCosts() << endl;
+    // cout << G.SolveTwoPlayersCosts(true) << endl;
+    // G.CheckCorrectness();
     //cout << G.GetIneqSatPercentage() << endl;
     //cout << G.CountNumOfNE() << endl;
- 
-    TryToSolve(2, 4, 3, {{2, 3}, {2, 3}, {2, 3}, {0, 0}}, 0, true); // 0.975
+    //TryToSolve(2, 3, 6, {{1, 2}, {1, 2}, {0, 3}, {0, 0}}, 0, true);
+    TryToSolve(5, 5, 2, {{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true); //offset - 1732 // 0.991
     // 2250 - for cycle_size = 3
     // 320 for {3, 3, 3} and cycle_size = 6
     //cout << TryToSolve(2, 3, 6, 3, 208, true);
 
-    Py_Finalize();
+    LPSolver::ReleasePython();
     return 0;
 }
