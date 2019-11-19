@@ -188,11 +188,9 @@ class LPSolver {
       assert(sol.size() == num_of_variables_);
       vector<double> sums(Size(), 0.0);
       bool is_ok = true;
-      for (size_t x_coord = 0; x_coord < sparse_ineqs_.size(); ++x_coord) {
-        for (auto& pair : sparse_ineqs_[x_coord]) {
-          size_t y_coord = pair.first;
-          int val = pair.second;
-          sums[x_coord] += sol[y_coord] * val;
+      for (size_t ineq_idx = 0; ineq_idx < ineqs_.size(); ++ineq_idx) {
+        for (size_t var_idx = 0; var_idx < num_of_variables_; ++var_idx) {
+          sums[ineq_idx] += ineqs_[ineq_idx][var_idx] * sol[var_idx];
         }
       }
       
@@ -202,14 +200,15 @@ class LPSolver {
       return is_ok;
     }
 
-    void PushInequality(const vector<pair<int, int>>& sparse_ineq, int bound) { // last coeff is number after comparison sing. a_1x_1 + ... + a_nx_n <= c
-      sparse_ineqs_.emplace_back(sparse_ineq);
+    bool PushInequality(const vector<int>& ineq, int bound) { // last coeff is number after comparison sing. a_1x_1 + ... + a_nx_n <= c
+      ineqs_.emplace_back(ineq);
       bounds_.emplace_back(bound);
+      return true;
     }
 
     void PopInequality() {
-      assert(!sparse_ineqs_.empty());
-      sparse_ineqs_.pop_back();
+      assert(!ineqs_.empty());
+      ineqs_.pop_back();
       assert(!bounds_.empty());
       bounds_.pop_back();
     }
@@ -218,22 +217,9 @@ class LPSolver {
       return bounds_.size();
     }
 
-    bool IsFeasible(bool should_print_ineq = false) {
-      if (should_print_ineq) {
-        vector<vector<int>> m(sparse_ineqs_.size(), vector<int>(num_of_variables_));
-        for (size_t x = 0; x < sparse_ineqs_.size(); ++x) {
-          for (auto& P : sparse_ineqs_[x]) {
-            m[x][P.first] = P.second;
-          }
-        }
-        for (size_t i = 0; i < sparse_ineqs_.size(); ++i) {
-          for (size_t j = 0; j < num_of_variables_; ++j) {
-            cout << m[i][j] << " ";
-          }
-          cout << endl;
-        }
-      }
-      return PyInt_AsLong(CallCvxopt(feasibility_func_));
+    bool IsFeasible() {
+      int res = PyInt_AsLong(CallCvxopt(feasibility_func_));
+      return res;
     }
 
   private:
@@ -243,24 +229,13 @@ class LPSolver {
     PyObject* CallCvxopt(PyObject* call_function) {
       //TimeCounter feasibility_check_timer(TimeCounter::kSeconds);
       //feasibility_check_timer.start(); // 0.1 for check with files and shell call.
-      PyObject* p_args = PyTuple_New(5);
-      
+      PyObject* p_args = PyTuple_New(2);
 
-      assert(!sparse_ineqs_.empty());
+      assert(!ineqs_.empty());
       assert(!bounds_.empty());
-      vector<int> x_coords, y_coords, values;
-      for (size_t ineq_idx = 0; ineq_idx < sparse_ineqs_.size(); ++ineq_idx) {
-        for (size_t val_idx = 0; val_idx < sparse_ineqs_[ineq_idx].size(); ++val_idx) {
-          x_coords.emplace_back(ineq_idx);
-          y_coords.emplace_back(sparse_ineqs_[ineq_idx][val_idx].first);
-          values.emplace_back(sparse_ineqs_[ineq_idx][val_idx].second);
-        }
-      }
-      PyTuple_SetItem(p_args, 0, PListFromVector(x_coords, "int"));
-      PyTuple_SetItem(p_args, 1, PListFromVector(y_coords, "int"));
-      PyTuple_SetItem(p_args, 2, PListFromVector(values, "double"));
-      PyTuple_SetItem(p_args, 3, PListFromVector(bounds_, "double"));
-      PyTuple_SetItem(p_args, 4, PyInt_FromLong(num_of_variables_));
+
+      PyTuple_SetItem(p_args, 0, PMatrixFromVector(ineqs_, "int"));
+      PyTuple_SetItem(p_args, 1, PListFromVector(bounds_, "int"));
 
       PyObject* call_result = PyObject_CallObject(call_function, p_args);
 
@@ -289,17 +264,17 @@ class LPSolver {
       return l;
     }
 
-    PyObject* PMatrixFromVector(const vector<vector<int>>& matrix) {
+    PyObject* PMatrixFromVector(const vector<vector<int>>& matrix, const string& type) {
       PyObject* l = PyList_New(matrix.size());
       for (size_t i = 0; i < matrix.size(); ++i) {
-        PyList_SET_ITEM(l, i, PListFromVector(matrix[i], "int"));
+        PyList_SET_ITEM(l, i, PListFromVector(matrix[i], type));
       }
       return l;
     }
 
     int num_of_variables_;
-    vector<int> bounds_; // first three vectors store inequalities in sparse form
-    vector<vector<pair<int, int>>> sparse_ineqs_;
+    vector<int> bounds_;
+    vector<vector<int>> ineqs_;
 };
 
 PyObject* LPSolver::feasibility_func_ = nullptr;
@@ -571,14 +546,7 @@ class NashDigraph {
       for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
         ineq[var_idx] = new_func[var_idx] - old_func[var_idx];
       }
-      vector<pair<int, int>> sparse_ineq;
-      for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
-        if (ineq[var_idx] != 0) {
-          sparse_ineq.emplace_back(var_idx, ineq[var_idx]);
-        }
-      }
-      lp_solver->PushInequality(sparse_ineq, -1);
-      return true;
+      return lp_solver->PushInequality(ineq, -1);
     }
 
     bool GoFirstPlayer(
@@ -779,11 +747,196 @@ class NashDigraph {
       LPSolver lp_solver_second_player(num_of_edges_);
       if (are_costs_positive) {
         for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
-          lp_solver_first_player.PushInequality(vector<pair<int, int>>({{var_idx, -1}}), -1);
-          lp_solver_second_player.PushInequality(vector<pair<int, int>>({{var_idx, -1}}), -1);
+          vector<int> ineq(num_of_edges_);
+          ineq[var_idx] = -1;
+          lp_solver_first_player.PushInequality(ineq, -1);
+          lp_solver_second_player.PushInequality(ineq, -1);
         }
       }
       return SolveTwoPlayersCostsRec(linear_funcs_by_cell, 0, 0, &is_pair_of_strategies_used, &lp_solver_first_player, &lp_solver_second_player);
+    }
+
+    bool SolveThreePlayersCosts() {
+      int n = all_possible_players_strategies_[0].size();
+      int m = all_possible_players_strategies_[1].size();
+      int k = all_possible_players_strategies_[2].size();
+      ineq_sat_percentage_ = -1.0;
+      cerr << "Num of strategies for players: " << n << " " << m << " " << k << endl;
+      if (n == 0 || m == 0 || k == 0) {
+        return false;
+      }
+      vector<vector<vector<int>>> is_cell_used(n, vector<vector<int>>(m, vector<int>(k)));
+      vector<vector<vector<vector<int>>>> linear_func_by_cell(n, vector<vector<vector<int>>>(m, vector<vector<int>>(k)));
+      for (int cx = 0; cx < n; ++cx) {
+        for (int cy = 0; cy < m; ++cy) {
+          for (int cz = 0; cz < k; ++cz) {
+            vector<size_t> all_players_strategy(turns_.size());
+            ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
+            ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
+            ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[2][cz], 2, &all_players_strategy);
+            linear_func_by_cell[cx][cy][cz] = GetLinFuncsForPlayersByGlobalStrategy(all_players_strategy);
+          }
+        }
+      }
+      LPSolver lp_x(num_of_edges_), lp_y(num_of_edges_), lp_z(num_of_edges_);
+      for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
+        vector<int> ineq(num_of_edges_);
+        ineq[var_idx] = -1;
+        lp_x.PushInequality(ineq, -1);
+        lp_y.PushInequality(ineq, -1);
+        lp_z.PushInequality(ineq, -1);
+      }
+      vector<vector<int>> best_xy(n, vector<int>(m, -1));
+      vector<vector<int>> best_yz(m, vector<int>(k, -1));
+      vector<vector<int>> best_xz(n, vector<int>(k, -1));
+      return SolveThreePlayersCostsRec(linear_func_by_cell, 0, 0, 0, &is_cell_used, &lp_x, &lp_y, &lp_z, &best_xy, &best_yz, &best_xz);
+    }
+
+    bool SolveThreePlayersCostsRec(
+      const vector<vector<vector<vector<int>>>>& linear_funcs_by_cell,
+      int cx,
+      int cy,
+      int cz,
+      vector<vector<vector<int>>>* is_cell_used,
+      LPSolver* lp_x,
+      LPSolver* lp_y,
+      LPSolver* lp_z,
+      vector<vector<int>>* best_xy,
+      vector<vector<int>>* best_yz,
+      vector<vector<int>>* best_xz
+    ) {
+      int n = is_cell_used->size();
+      int m = (*is_cell_used)[0].size();
+      int k = (*is_cell_used)[0][0].size();
+
+      if ((*is_cell_used)[cx][cy][cz]) {
+        for (int tx = 0; tx < n; ++tx) {
+          for (int ty = 0; ty < m; ++ty) {
+            for (int tz = 0; tz < k; ++tz) {
+              if (!(*is_cell_used)[tx][ty][tz]) {
+                return SolveThreePlayersCostsRec(linear_funcs_by_cell, tx, ty, tz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+              }
+            }
+          }
+        }
+        return true;
+      }
+      size_t num_of_used_cells = 0;
+      for (int tx = 0; tx < n; ++tx) {
+        for (int ty = 0; ty < m; ++ty) {
+          for (int tz = 0; tz < k; ++tz) {
+            if ((*is_cell_used)[tx][ty][tz]) {
+              num_of_used_cells++;
+            }
+          }
+        }
+      }
+      cout << "BRANCH!" << endl;
+      cout << double(num_of_used_cells) / (n * m * k) << endl;
+      (*is_cell_used)[cx][cy][cz] = 1;
+
+      // FIRST
+      size_t old_size_lp_x = lp_x->Size();
+      size_t old_size_lp_y = lp_y->Size();
+      size_t old_size_lp_z = lp_z->Size();
+
+      if ((*best_yz)[cy][cz] == -1) {
+        for (int tx = 0; tx < n; ++tx) {
+          if (tx == cx) {
+            continue;
+          }
+          (*best_yz)[cy][cz] = tx;
+          bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[tx][cy][cz], lp_x);
+          if (lp_x->IsFeasible() && is_improved) {
+            bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+            if (branch_res) {
+              return true;
+            }
+          }
+          while (lp_x->Size() != old_size_lp_x) {
+            lp_x->PopInequality();
+          }
+          (*best_yz)[cy][cz] = -1;
+        }
+      } else {
+        bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[(*best_yz)[cy][cz]][cy][cz], lp_x);
+        if (lp_x->IsFeasible() && is_improved) {
+          bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+          if (branch_res) {
+            return true;
+          }
+        }
+        while (lp_x->Size() != old_size_lp_x) {
+          lp_x->PopInequality();
+        }
+      }
+
+      // SECOND
+      if ((*best_xz)[cx][cz] == -1) {
+        for (int ty = 0; ty < m; ++ty) {
+          if (ty == cy) {
+            continue;
+          }
+          (*best_xz)[cx][cz] = ty;
+          bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][ty][cz], lp_y);
+          if (lp_y->IsFeasible() && is_improved) {
+            bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+            if (branch_res) {
+              return true;
+            }
+          }
+          while (lp_y->Size() != old_size_lp_y) {
+            lp_y->PopInequality();
+          }
+          (*best_xz)[cx][cz] = -1;
+        }
+      } else {
+        bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][(*best_xz)[cx][cz]][cz], lp_y);
+        if (lp_y->IsFeasible() && is_improved) {
+          bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+          if (branch_res) {
+            return true;
+          }
+        }
+        while (lp_y->Size() != old_size_lp_y) {
+          lp_y->PopInequality();
+        }
+      }
+
+      // THIRD
+      if ((*best_xy)[cx][cy] == -1) {
+        for (int tz = 0; tz < k; ++tz) {
+          if (tz == cz) {
+            continue;
+          }
+          (*best_xy)[cx][cy] = tz;
+          bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][cy][tz], lp_z);
+          if (lp_z->IsFeasible() && is_improved) {
+            bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+            if (branch_res) {
+              return true;
+            }
+          }
+          while (lp_z->Size() != old_size_lp_z) {
+            lp_z->PopInequality();
+          }
+          (*best_xy)[cx][cy] = -1;
+        }
+      } else {
+        bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][cy][(*best_xy)[cx][cy]], lp_z);
+        if (lp_z->IsFeasible() && is_improved) {
+          bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+          if (branch_res) {
+            return true;
+          }
+        }
+        while (lp_z->Size() != old_size_lp_z) {
+          lp_z->PopInequality();
+        }
+      }
+
+      (*is_cell_used)[cx][cy][cz] = 0;
+      return false;
     }
 
     void Dfs(int cur_vertex, vector<int>* is_vertex_visited) {
@@ -1024,14 +1177,16 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
 int main() {
     LPSolver::LaunchPython();
     //freopen("input.txt", "r", stdin);
-    // NashDigraph G("input.txt", false);
+    NashDigraph G("input.txt", false);
+    cout << G.SolveThreePlayersCosts() << endl;
+
     // cout << G.AreAllVerticesAccessibleFromStart() << endl;
     // cout << G.SolveTwoPlayersCosts(true) << endl;
     // G.CheckCorrectness();
     //cout << G.GetIneqSatPercentage() << endl;
     //cout << G.CountNumOfNE() << endl;
     //TryToSolve(2, 3, 6, {{1, 2}, {1, 2}, {0, 3}, {0, 0}}, 0, true);
-    TryToSolve(5, 5, 2, {{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true); //offset - 1732 // 0.991
+    //TryToSolve(5, 5, 2, {{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true); //offset - 1732 // 0.991
     // 2250 - for cycle_size = 3
     // 320 for {3, 3, 3} and cycle_size = 6
     //cout << TryToSolve(2, 3, 6, 3, 208, true);
