@@ -783,6 +783,10 @@ class NashDigraph {
         lp_x.PushInequality(ineq, -1);
         lp_y.PushInequality(ineq, -1);
         lp_z.PushInequality(ineq, -1);
+        ineq[var_idx] = 1;
+        lp_x.PushInequality(ineq, 10);
+        lp_y.PushInequality(ineq, 10);
+        lp_z.PushInequality(ineq, 10);
       }
       vector<vector<int>> best_xy(n, vector<int>(m, -1));
       vector<vector<int>> best_yz(m, vector<int>(k, -1));
