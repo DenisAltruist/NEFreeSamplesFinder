@@ -561,28 +561,27 @@ class NashDigraph {
       // finding cell to improve for the first player
       for (int tx = 0; tx < n; ++tx) {
         size_t old_lp_solver_size = lp_solver_first_player->Size();
-        if (tx == cx) { 
+        if (linear_funcs_by_cell[tx][cy] == linear_funcs_by_cell[cx][cy]) {
           continue;
         }
-        
         const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy];
         if (best_linear_func.empty()) {
           continue;
         }
         for (int func_idx = 0; func_idx < n; ++func_idx) {
-          if (func_idx == tx) {
+          if (linear_funcs_by_cell[func_idx][cy] == linear_funcs_by_cell[tx][cy]) {
             continue;
           }
-          AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], lp_solver_first_player);
+          assert(AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], lp_solver_first_player));
         }
         if (lp_solver_first_player->IsFeasible()) {
-          vector<pair<int, int>> colored_cells;
+          vector<int> colored_cells;
           for (int wx = 0; wx < n; ++wx) {
-            if (wx == tx) {
+            if (linear_funcs_by_cell[wx][cy] == linear_funcs_by_cell[tx][cy]) {
               continue;
             }
             if (!(*is_cell_used)[wx][cy]) {
-              colored_cells.emplace_back(wx, cy);
+              colored_cells.emplace_back(wx);
               (*is_cell_used)[wx][cy] = 1;
             }
           }
@@ -590,11 +589,10 @@ class NashDigraph {
           if (branch_result) {
             return true;
           }
-          for (const auto& colored_cell : colored_cells) {
-            (*is_cell_used)[colored_cell.first][colored_cell.second] = 0;
+          for (int colored_cell : colored_cells) {
+            (*is_cell_used)[colored_cell][cy] = 0;
           }
         }
-      
         while (lp_solver_first_player->Size() != old_lp_solver_size) {
           lp_solver_first_player->PopInequality();
         } 
@@ -614,7 +612,7 @@ class NashDigraph {
       // finding cell to improve for the second player
       for (int ty = 0; ty < m; ++ty) {
          size_t old_lp_solver_size = lp_solver_second_player->Size();
-        if (ty == cy) { 
+        if (linear_funcs_by_cell[cx][ty] == linear_funcs_by_cell[cx][cy]) { 
           continue;
         }
         const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty];
@@ -622,19 +620,19 @@ class NashDigraph {
           continue;
         }
         for (int func_idx = 0; func_idx < m; ++func_idx) {
-          if (func_idx == ty) {
+          if (linear_funcs_by_cell[cx][func_idx] == linear_funcs_by_cell[cx][ty]) {
             continue;
           }
-          AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], lp_solver_second_player);
+          assert(AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], lp_solver_second_player));
         }
         if (lp_solver_second_player->IsFeasible()) {
-          vector<pair<int, int>> colored_cells;
+          vector<int> colored_cells;
           for (int wy = 0; wy < m; ++wy) {
-            if (wy == ty) {
+            if (linear_funcs_by_cell[cx][wy] == linear_funcs_by_cell[cx][ty]) {
               continue;
             }
             if (!(*is_cell_used)[cx][wy]) {
-              colored_cells.emplace_back(cx, wy);
+              colored_cells.emplace_back(wy);
               (*is_cell_used)[cx][wy] = 1;
             }
           }
@@ -642,8 +640,8 @@ class NashDigraph {
           if (branch_result) {
             return true;
           }
-          for (const auto& colored_cell : colored_cells) {
-            (*is_cell_used)[colored_cell.first][colored_cell.second] = 0;
+          for (int colored_cell : colored_cells) {
+            (*is_cell_used)[cx][colored_cell] = 0;
           }
         }
         while (lp_solver_second_player->Size() != old_lp_solver_size) {
@@ -789,7 +787,7 @@ class NashDigraph {
       vector<vector<int>> best_xy(n, vector<int>(m, -1));
       vector<vector<int>> best_yz(m, vector<int>(k, -1));
       vector<vector<int>> best_xz(n, vector<int>(k, -1));
-      return SolveThreePlayersCostsRec(linear_func_by_cell, 0, 0, 0, &is_cell_used, &lp_x, &lp_y, &lp_z, &best_xy, &best_yz, &best_xz);
+      return SolveThreePlayersCostsRec(linear_func_by_cell, 0, 0, 0, &is_cell_used, &lp_x, &lp_y, &lp_z);
     }
 
     bool SolveThreePlayersCostsRec(
@@ -800,10 +798,7 @@ class NashDigraph {
       vector<vector<vector<int>>>* is_cell_used,
       LPSolver* lp_x,
       LPSolver* lp_y,
-      LPSolver* lp_z,
-      vector<vector<int>>* best_xy,
-      vector<vector<int>>* best_yz,
-      vector<vector<int>>* best_xz
+      LPSolver* lp_z
     ) {
       int n = is_cell_used->size();
       int m = (*is_cell_used)[0].size();
@@ -814,7 +809,7 @@ class NashDigraph {
           for (int ty = 0; ty < m; ++ty) {
             for (int tz = 0; tz < k; ++tz) {
               if (!(*is_cell_used)[tx][ty][tz]) {
-                return SolveThreePlayersCostsRec(linear_funcs_by_cell, tx, ty, tz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
+                return SolveThreePlayersCostsRec(linear_funcs_by_cell, tx, ty, tz, is_cell_used, lp_x, lp_y, lp_z);
               }
             }
           }
@@ -831,110 +826,137 @@ class NashDigraph {
           }
         }
       }
-      cout << "BRANCH!" << endl;
       cout << double(num_of_used_cells) / (n * m * k) << endl;
       (*is_cell_used)[cx][cy][cz] = 1;
 
       // FIRST
-      size_t old_size_lp_x = lp_x->Size();
-      size_t old_size_lp_y = lp_y->Size();
-      size_t old_size_lp_z = lp_z->Size();
-
-      if ((*best_yz)[cy][cz] == -1) {
-        for (int tx = 0; tx < n; ++tx) {
-          if (tx == cx) {
+      for (int tx = 0; tx < n; ++tx) {
+        size_t old_lp_solver_size = lp_x->Size();
+        if (linear_funcs_by_cell[tx][cy][cz] == linear_funcs_by_cell[cx][cy][cz]) { 
+          continue;
+        }
+        
+        const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy][cz];
+        if (best_linear_func.empty()) {
+          continue;
+        }
+        for (int func_idx = 0; func_idx < n; ++func_idx) {
+          if (linear_funcs_by_cell[func_idx][cy][cz] == linear_funcs_by_cell[tx][cy][cz]) {
             continue;
           }
-          (*best_yz)[cy][cz] = tx;
-          bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[tx][cy][cz], lp_x);
-          if (lp_x->IsFeasible() && is_improved) {
-            bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
-            if (branch_res) {
-              return true;
+          assert(AddInequality(linear_funcs_by_cell[func_idx][cy][cz], linear_funcs_by_cell[tx][cy][cz], lp_x));
+        }
+        if (lp_x->IsFeasible()) {
+          vector<int> colored_cells;
+          for (int wx = 0; wx < n; ++wx) {
+            if (linear_funcs_by_cell[tx][cy][cz] == linear_funcs_by_cell[wx][cy][cz]) {
+              continue;
+            }
+            if (!(*is_cell_used)[wx][cy][cz]) {
+              colored_cells.emplace_back(wx);
+              (*is_cell_used)[wx][cy][cz] = 1;
             }
           }
-          while (lp_x->Size() != old_size_lp_x) {
-            lp_x->PopInequality();
-          }
-          (*best_yz)[cy][cz] = -1;
-        }
-      } else {
-        bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[(*best_yz)[cy][cz]][cy][cz], lp_x);
-        if (lp_x->IsFeasible() && is_improved) {
-          bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
-          if (branch_res) {
+          bool branch_result = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z);
+          if (branch_result) {
             return true;
           }
+          for (int colored_cell : colored_cells) {
+            (*is_cell_used)[colored_cell][cy][cz] = 0;
+          }
         }
-        while (lp_x->Size() != old_size_lp_x) {
+      
+        while (lp_x->Size() != old_lp_solver_size) {
           lp_x->PopInequality();
-        }
+        } 
       }
+      
 
       // SECOND
-      if ((*best_xz)[cx][cz] == -1) {
-        for (int ty = 0; ty < m; ++ty) {
-          if (ty == cy) {
+      for (int ty = 0; ty < m; ++ty) {
+        size_t old_lp_solver_size = lp_y->Size();
+        if (linear_funcs_by_cell[cx][ty][cz] == linear_funcs_by_cell[cx][cy][cz]) { 
+          continue;
+        }
+        
+        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty][cz];
+        if (best_linear_func.empty()) {
+          continue;
+        }
+        for (int func_idx = 0; func_idx < m; ++func_idx) {
+          if (linear_funcs_by_cell[cx][func_idx][cz] == linear_funcs_by_cell[cx][ty][cz]) {
             continue;
           }
-          (*best_xz)[cx][cz] = ty;
-          bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][ty][cz], lp_y);
-          if (lp_y->IsFeasible() && is_improved) {
-            bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
-            if (branch_res) {
-              return true;
+          assert(AddInequality(linear_funcs_by_cell[cx][func_idx][cz], linear_funcs_by_cell[cx][ty][cz], lp_y));
+        }
+        if (lp_y->IsFeasible()) {
+          vector<int> colored_cells;
+          for (int wy = 0; wy < m; ++wy) {
+            if (linear_funcs_by_cell[cx][wy][cz] == linear_funcs_by_cell[cx][ty][cz]) {
+              continue;
+            }
+            if (!(*is_cell_used)[cx][wy][cz]) {
+              colored_cells.emplace_back(wy);
+              (*is_cell_used)[cx][wy][cz] = 1;
             }
           }
-          while (lp_y->Size() != old_size_lp_y) {
-            lp_y->PopInequality();
-          }
-          (*best_xz)[cx][cz] = -1;
-        }
-      } else {
-        bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][(*best_xz)[cx][cz]][cz], lp_y);
-        if (lp_y->IsFeasible() && is_improved) {
-          bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
-          if (branch_res) {
+          bool branch_result = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z);
+          if (branch_result) {
             return true;
           }
+          for (int colored_cell : colored_cells) {
+            (*is_cell_used)[cx][colored_cell][cz] = 0;
+          }
         }
-        while (lp_y->Size() != old_size_lp_y) {
+      
+        while (lp_y->Size() != old_lp_solver_size) {
           lp_y->PopInequality();
-        }
+        } 
       }
+      
 
       // THIRD
-      if ((*best_xy)[cx][cy] == -1) {
-        for (int tz = 0; tz < k; ++tz) {
-          if (tz == cz) {
+      for (int tz = 0; tz < k; ++tz) {
+        size_t old_lp_solver_size = lp_z->Size();
+        if (linear_funcs_by_cell[cx][cy][tz] == linear_funcs_by_cell[cx][cy][cz]) { 
+          continue;
+        }
+        
+        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][cy][tz];
+        if (best_linear_func.empty()) {
+          continue;
+        }
+        for (int func_idx = 0; func_idx < k; ++func_idx) {
+          if (linear_funcs_by_cell[cx][cy][func_idx] == linear_funcs_by_cell[cx][cy][tz]) {
             continue;
           }
-          (*best_xy)[cx][cy] = tz;
-          bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][cy][tz], lp_z);
-          if (lp_z->IsFeasible() && is_improved) {
-            bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
-            if (branch_res) {
-              return true;
+          assert(AddInequality(linear_funcs_by_cell[cx][cy][func_idx], linear_funcs_by_cell[cx][cy][tz], lp_z));
+        }
+        if (lp_z->IsFeasible()) {
+          vector<int> colored_cells;
+          for (int wz = 0; wz < k; ++wz) {
+            if (linear_funcs_by_cell[cx][cy][wz] == linear_funcs_by_cell[cx][cy][tz]) {
+              continue;
+            }
+            if (!(*is_cell_used)[cx][cy][wz]) {
+              colored_cells.emplace_back(wz);
+              (*is_cell_used)[cx][cy][wz] = 1;
             }
           }
-          while (lp_z->Size() != old_size_lp_z) {
-            lp_z->PopInequality();
-          }
-          (*best_xy)[cx][cy] = -1;
-        }
-      } else {
-        bool is_improved = AddInequality(linear_funcs_by_cell[cx][cy][cz], linear_funcs_by_cell[cx][cy][(*best_xy)[cx][cy]], lp_z);
-        if (lp_z->IsFeasible() && is_improved) {
-          bool branch_res = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z, best_xy, best_yz, best_xz);
-          if (branch_res) {
+          bool branch_result = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z);
+          if (branch_result) {
             return true;
           }
+          for (int colored_cell : colored_cells) {
+            (*is_cell_used)[cx][cy][colored_cell] = 0;
+          }
         }
-        while (lp_z->Size() != old_size_lp_z) {
+      
+        while (lp_z->Size() != old_lp_solver_size) {
           lp_z->PopInequality();
-        }
+        } 
       }
-
+      
       (*is_cell_used)[cx][cy][cz] = 0;
       return false;
     }
@@ -1179,14 +1201,15 @@ int main() {
     //freopen("input.txt", "r", stdin);
     NashDigraph G("input.txt", false);
     cout << G.SolveThreePlayersCosts() << endl;
+    //G.CheckCorrectnessThree();
 
     // cout << G.AreAllVerticesAccessibleFromStart() << endl;
     // cout << G.SolveTwoPlayersCosts(true) << endl;
     // G.CheckCorrectness();
     //cout << G.GetIneqSatPercentage() << endl;
     //cout << G.CountNumOfNE() << endl;
-    //TryToSolve(2, 3, 6, {{1, 2}, {1, 2}, {0, 3}, {0, 0}}, 0, true);
-    //TryToSolve(5, 5, 2, {{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true); //offset - 1732 // 0.991
+    //TryToSolve(2, 3, 6, {{1, 2}, {1, 2}, {0, 3}, {0, 0}}, "offset.txt", true);
+    //TryToSolve(3, 4, 2, {{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true); //offset - 1732 // 0.991
     // 2250 - for cycle_size = 3
     // 320 for {3, 3, 3} and cycle_size = 6
     //cout << TryToSolve(2, 3, 6, 3, 208, true);
