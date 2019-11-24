@@ -5,7 +5,7 @@
 
 using namespace std;
 
-mt19937 mt(12345);
+mt19937 mt(123);
 
 class TimeCounter {
  public:
@@ -783,18 +783,47 @@ class NashDigraph {
           }
         }
       }
+
       LPSolver lp_x(num_of_edges_), lp_y(num_of_edges_), lp_z(num_of_edges_);
-      for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
-        vector<int> ineq(num_of_edges_);
-        ineq[var_idx] = -1;
-        lp_x.PushInequality(ineq, -1);
-        lp_y.PushInequality(ineq, -1);
-        lp_z.PushInequality(ineq, -1);
-        ineq[var_idx] = 1;
+      if (is_complete_) {
+        vector<LPSolver*> lp_solvers({&lp_x, &lp_y, &lp_z});
+        if (is_complete_) {
+          for (size_t v = 0; v < turns_.size(); ++v) {
+            for (auto& edge : edges_[v]) {
+              int add_fully = rand() % 6;
+              if (add_fully) {
+                for (size_t player_id = 0; player_id < num_of_players_; ++player_id) {
+                  vector<int> ineq(num_of_edges_);
+                  size_t var_idx = edge.idx;
+                  ineq[var_idx] = -1;
+                  lp_solvers[player_id]->PushInequality(ineq, -edge.cost[player_id]);
+                  ineq[var_idx] = 1;
+                  lp_solvers[player_id]->PushInequality(ineq, edge.cost[player_id]);
+                }
+              } else {
+                for (size_t player_id; player_id < num_of_players_; ++player_id) {
+                  vector<int> ineq(num_of_edges_);
+                  ineq[edge.idx] = -1;
+                  lp_solvers[player_id]->PushInequality(ineq, -1);
+                }
+              }
+            }
+          }
+        }
+      } else {
+        for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
+          vector<int> ineq(num_of_edges_);
+          ineq[var_idx] = -1;
+          lp_x.PushInequality(ineq, -1);
+          lp_y.PushInequality(ineq, -1);
+          lp_z.PushInequality(ineq, -1);
+          ineq[var_idx] = 1;
+          lp_x.PushInequality(ineq, 9);
+          lp_y.PushInequality(ineq, 9);
+          lp_z.PushInequality(ineq, 9);
+        }
       }
-      vector<vector<int>> best_xy(n, vector<int>(m, -1));
-      vector<vector<int>> best_yz(m, vector<int>(k, -1));
-      vector<vector<int>> best_xz(n, vector<int>(k, -1));
+      
       return SolveThreePlayersCostsRec(linear_func_by_cell, 0, 0, 0, &is_cell_used, &lp_x, &lp_y, &lp_z);
     }
 
@@ -809,6 +838,7 @@ class NashDigraph {
       LPSolver* lp_y,
       LPSolver* lp_z
     ) {
+      rec_stack.push_back('X');
       int n = is_cell_used->size();
       for (int tx = 0; tx < n; ++tx) {
         size_t old_lp_solver_size = lp_x->Size();
@@ -850,6 +880,7 @@ class NashDigraph {
           lp_x->PopInequality();
         } 
       }
+      rec_stack.pop_back();
       return false;
     }
 
@@ -863,6 +894,7 @@ class NashDigraph {
       LPSolver* lp_y,
       LPSolver* lp_z
     ) {
+      rec_stack.push_back('Y');
       int m = (*is_cell_used)[0].size();
       for (int ty = 0; ty < m; ++ty) {
         size_t old_lp_solver_size = lp_y->Size();
@@ -904,6 +936,7 @@ class NashDigraph {
           lp_y->PopInequality();
         } 
       }
+      rec_stack.pop_back();
       return false;
     }
 
@@ -917,6 +950,7 @@ class NashDigraph {
       LPSolver* lp_y,
       LPSolver* lp_z
     ) {
+      rec_stack.push_back('Z');
       int k = (*is_cell_used)[0][0].size();
       for (int tz = 0; tz < k; ++tz) {
         size_t old_lp_solver_size = lp_z->Size();
@@ -958,6 +992,7 @@ class NashDigraph {
           lp_z->PopInequality();
         } 
       }
+      rec_stack.pop_back();
       return false;
     }
 
@@ -998,16 +1033,17 @@ class NashDigraph {
         }
       }
       cout << double(num_of_used_cells) / (n * m * k) << endl;
+      // cout << rec_stack << endl;
       (*is_cell_used)[cx][cy][cz] = 1;
 
       vector<function<bool()>> branch_calls;
 
       branch_calls.emplace_back([this, &linear_funcs_by_cell, &cx, &cy, &cz, &is_cell_used, &lp_x, &lp_y, &lp_z]() { 
-        return GoX(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z); 
+        return GoY(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z); 
       });
 
       branch_calls.emplace_back([this, &linear_funcs_by_cell, &cx, &cy, &cz, &is_cell_used, &lp_x, &lp_y, &lp_z]() { 
-        return GoY(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z); 
+        return GoX(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z); 
       });
 
       branch_calls.emplace_back([this, &linear_funcs_by_cell, &cx, &cy, &cz, &is_cell_used, &lp_x, &lp_y, &lp_z]() { 
@@ -1097,6 +1133,7 @@ class NashDigraph {
       return total_costs;
     }
 
+    string rec_stack;
     int num_of_transmissions_limit_;
     vector<int> turns_; // each value is in [-1; num_of_players), where -1 denotes terminal vertex
     vector<vector<Edge>> edges_;
@@ -1263,23 +1300,23 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
 }
 
 int main() {
-    LPSolver::LaunchPython();
-    //freopen("input.txt", "r", stdin);
-    NashDigraph G("input.txt", false);
-    cout << G.SolveThreePlayersCosts() << endl;
-    //G.CheckCorrectnessThree();
+  LPSolver::LaunchPython();
+  //freopen("input.txt", "r", stdin);
+  NashDigraph G("input.txt", true);
+  cout << G.SolveThreePlayersCosts() << endl;
+  //G.CheckCorrectnessThree();
 
-    // cout << G.AreAllVerticesAccessibleFromStart() << endl;
-    // cout << G.SolveTwoPlayersCosts(true) << endl;
-    // G.CheckCorrectness();
-    //cout << G.GetIneqSatPercentage() << endl;
-    //cout << G.CountNumOfNE() << endl;
-    //TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 0}}, "offset.txt", true);
-    //TryToSolve(3, 4, 2, {{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true); //offset - 1732 // 0.991
-    // 2250 - for cycle_size = 3
-    // 320 for {3, 3, 3} and cycle_size = 6
-    //cout << TryToSolve(2, 3, 6, 3, 208, true);
+  // cout << G.AreAllVerticesAccessibleFromStart() << endl;
+  // cout << G.SolveTwoPlayersCosts(true) << endl;
+  // G.CheckCorrectness();
+  //cout << G.GetIneqSatPercentage() << endl;
+  //cout << G.CountNumOfNE() << endl;
+  //TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 0}}, "offset.txt", true);
+  //TryToSolve(2, 3, 6, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true); //offset - 1732 // 0.991
+  // 2250 - for cycle_size = 3
+  // 320 for {3, 3, 3} and cycle_size = 6
+  //cout << TryToSolve(2, 3, 6, 3, 208, true);
 
-    LPSolver::ReleasePython();
-    return 0;
+  LPSolver::ReleasePython();
+  return 0;
 }
