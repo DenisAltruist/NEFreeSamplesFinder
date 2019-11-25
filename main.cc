@@ -1279,8 +1279,8 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
 int main() {
   LPSolver::LaunchPython();
   //freopen("input.txt", "r", stdin);
-  //NashDigraph G("input.txt", false);
-  //cout << G.SolveThreePlayersCosts() << endl;
+  NashDigraph G("input.txt", false);
+  cout << G.SolveThreePlayersCosts() << endl;
   //G.CheckCorrectnessThree();
 
   // cout << G.AreAllVerticesAccessibleFromStart() << endl;
@@ -1289,7 +1289,7 @@ int main() {
   //cout << G.GetIneqSatPercentage() << endl;
   //cout << G.CountNumOfNE() << endl;
   //TryToSolve(2, 3, 6, {{0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true);
-  cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732 // 0.991 930
+  //cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732 // 0.991 930
   // 2250 - for cycle_size = 3
   // 320 for {3, 3, 3} and cycle_size = 6
   //cout << TryToSolve(2, 3, 6, 3, 208, true);
