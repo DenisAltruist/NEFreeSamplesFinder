@@ -1352,7 +1352,6 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     G.Print(false);
     G.Preprocess();
     G.CalcImprovementsTable();
-    G.SetTransmissionsLimit(500);
     bool g_res = G.SolveTwoPlayersCosts(true);
     G.CheckCorrectness();
     max_ineq_sat_percentage = max(max_ineq_sat_percentage, G.GetIneqSatPercentage());
