@@ -347,6 +347,88 @@ class NashDigraph {
       CalcAllPossiblePlayersStrategies();
     }
 
+    void CalcImprovementsTable() {
+      int profit = 0;
+
+      size_t n = all_possible_players_strategies_[0].size();
+      size_t m = all_possible_players_strategies_[1].size();
+      vector<vector<int>> can_improve_row(n, vector<int>(m, 0));
+      vector<vector<int>> can_improve_col(n, vector<int>(m, 0));
+      vector<vector<vector<int>>> linear_funcs_by_cell(n, vector<vector<int>>(m));
+      for (int cx = 0; cx < n; ++cx) {
+        for (int cy = 0; cy < m; ++cy) {
+          vector<size_t> all_players_strategy(turns_.size());
+          ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
+          ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
+          linear_funcs_by_cell[cx][cy] = GetLinFuncsForPlayersByGlobalStrategy(all_players_strategy);
+        }
+      }
+    
+      LPSolver base_lp;
+      for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
+        vector<int> ineq(num_of_edges_);
+        ineq[var_idx] = -1;
+        base_lp.PushInequality(ineq, -1);
+      }
+      for (size_t cx = 0; cx < n; ++cx) {
+        for (size_t cy = 0; cy < m; ++cy) {
+          if (linear_funcs_by_cell[cx][cy].empty()) {
+            continue;
+          }
+          LPSolver tmp_lp = base_lp;
+          for (size_t t = 0; t < m; ++t) {
+            if (linear_funcs_by_cell[cx][t] == linear_funcs_by_cell[cx][cy]) {
+              continue;
+            }
+            assert(AddInequality(linear_funcs_by_cell[cx][t], linear_funcs_by_cell[cx][cy], &tmp_lp));
+          }
+
+          can_improve_row[cx][cy] = tmp_lp.IsFeasible();
+          profit += !can_improve_row[cx][cy];
+
+          tmp_lp = base_lp;
+
+          for (size_t t = 0; t < n; ++t) {
+            if (linear_funcs_by_cell[t][cy] == linear_funcs_by_cell[cx][cy]) {
+              continue;
+            }
+            assert(AddInequality(linear_funcs_by_cell[t][cy], linear_funcs_by_cell[cx][cy], &tmp_lp));
+          }
+
+          can_improve_col[cx][cy] = tmp_lp.IsFeasible();
+          profit += !can_improve_col[cx][cy];
+        }
+      }
+      row_jumps_ = vector<vector<int>>(n);
+      for (int cx = 0; cx < n; ++cx) {
+        map<vector<int>, int> occurs;
+        for (int cy = 0; cy < m; ++cy) {
+          occurs[linear_funcs_by_cell[cx][cy]] = cy;
+        }
+        for (auto it = occurs.begin(); it != occurs.end(); ++it) {
+          int cy = it->second;
+          if (can_improve_row[cx][cy]) {
+            row_jumps_[cx].emplace_back(cy);
+          }
+        }
+      }
+      
+      col_jumps_ = vector<vector<int>>(m);
+      for (int cy = 0; cy < m; ++cy) {
+        map<vector<int>, int> occurs;
+
+        for (int cx = 0; cx < n; ++cx) {
+          occurs[linear_funcs_by_cell[cx][cy]] = cx;
+        }
+        for (auto it = occurs.begin(); it != occurs.end(); ++it) {
+          int cx = it->second;
+          if (can_improve_col[cx][cy]) {
+            col_jumps_[cy].emplace_back(cx);
+          }
+        }
+      }
+    }
+
     void Print(bool with_costs) {
       cout << turns_.size() << " " << num_of_edges_ << " " << num_of_players_ << " " << start_vertex_ << endl;
       for (size_t turn_idx = 0; turn_idx < turns_.size(); ++turn_idx) {
@@ -393,8 +475,9 @@ class NashDigraph {
         }
       }
       all_possible_players_strategies_[player_idx] = GenAllPossibleChoices(player_num_of_edges_limits);
-      // all_possible_players_strategies_[player_idx].pop_back();
-      // all_possible_players_strategies_[player_idx].pop_back();
+
+      all_possible_players_strategies_[player_idx].pop_back();
+      all_possible_players_strategies_[player_idx].pop_back();
     }
 
     void CalcAllPossiblePlayersStrategies() {
@@ -561,17 +644,15 @@ class NashDigraph {
     ) {
       int n = is_cell_used->size();
       // finding cell to improve for the first player
-      for (int tx = 0; tx < n; ++tx) {
+      for (int tx : col_jumps_[cy]) {
         size_t old_lp_solver_size = lp_x->Size();
         if (linear_funcs_by_cell[tx][cy] == linear_funcs_by_cell[cx][cy]) {
           continue;
         }
         const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy];
-        if (best_linear_func.empty()) {
-          continue;
-        }
-        for (int func_idx = 0; func_idx < n; ++func_idx) {
-          if (linear_funcs_by_cell[func_idx][cy] == linear_funcs_by_cell[tx][cy]) {
+        assert(!best_linear_func.empty());
+        for (int func_idx : col_jumps_[cy]) {
+          if (func_idx == tx) {
             continue;
           }
           assert(AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], lp_x));
@@ -612,17 +693,15 @@ class NashDigraph {
     ) {
       int m = (*is_cell_used)[0].size();
       // finding cell to improve for the second player
-      for (int ty = 0; ty < m; ++ty) {
-         size_t old_lp_solver_size = lp_y->Size();
+      for (int ty : row_jumps_[cx]) {
+        size_t old_lp_solver_size = lp_y->Size();
         if (linear_funcs_by_cell[cx][ty] == linear_funcs_by_cell[cx][cy]) { 
           continue;
         }
         const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty];
-        if (best_linear_func.empty()) {
-          continue;
-        }
-        for (int func_idx = 0; func_idx < m; ++func_idx) {
-          if (linear_funcs_by_cell[cx][func_idx] == linear_funcs_by_cell[cx][ty]) {
+        assert(!best_linear_func.empty());
+        for (int func_idx : row_jumps_[cx]) {
+          if (func_idx == ty) {
             continue;
           }
           assert(AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], lp_y));
@@ -766,6 +845,19 @@ class NashDigraph {
           lp_x.PushInequality(ineq, -1);
           lp_y.PushInequality(ineq, -1);
         }
+        /*
+        for (size_t v = 1; v <= 6; ++v) {
+          for (auto& edge : edges_[v]) {
+            if (edge.finish != 0) {
+              vector<int> ineq(num_of_edges_);
+              size_t var_idx = edge.idx;
+              ineq[var_idx] = 1;
+              lp_x.PushInequality(ineq, 1);
+              lp_y.PushInequality(ineq, 1);
+            }
+          }
+        }
+        */
       }
       return SolveTwoPlayersCostsRec(linear_funcs_by_cell, 0, 0, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
     }
@@ -1111,6 +1203,8 @@ class NashDigraph {
     }
 
     string rec_stack;
+    vector<vector<int>> row_jumps_;
+    vector<vector<int>> col_jumps_;
     int num_of_transmissions_limit_;
     vector<int> turns_; // each value is in [-1; num_of_players), where -1 denotes terminal vertex
     vector<vector<Edge>> edges_;
@@ -1257,7 +1351,8 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     }
     G.Print(false);
     G.Preprocess();
-    //G.SetTransmissionsLimit(20);
+    G.CalcImprovementsTable();
+    G.SetTransmissionsLimit(500);
     bool g_res = G.SolveTwoPlayersCosts(true);
     G.CheckCorrectness();
     max_ineq_sat_percentage = max(max_ineq_sat_percentage, G.GetIneqSatPercentage());
@@ -1279,8 +1374,8 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
 int main() {
   LPSolver::LaunchPython();
   //freopen("input.txt", "r", stdin);
-  NashDigraph G("input.txt", false);
-  cout << G.SolveThreePlayersCosts() << endl;
+  //NashDigraph G("input.txt", false);
+  //cout << G.SolveThreePlayersCosts() << endl;
   //G.CheckCorrectnessThree();
 
   // cout << G.AreAllVerticesAccessibleFromStart() << endl;
@@ -1288,7 +1383,7 @@ int main() {
   // G.CheckCorrectness();
   //cout << G.GetIneqSatPercentage() << endl;
   //cout << G.CountNumOfNE() << endl;
-  //TryToSolve(2, 3, 6, {{0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true);
+  TryToSolve(2, 3, 6, {{0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true);
   //cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732 // 0.991 930
   // 2250 - for cycle_size = 3
   // 320 for {3, 3, 3} and cycle_size = 6

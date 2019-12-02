@@ -1,5 +1,5 @@
 from scipy.optimize import linprog
-import datetime
+import time
 import numpy as np
 
 def solve(A, b):
