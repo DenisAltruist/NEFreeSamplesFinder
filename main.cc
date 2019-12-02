@@ -1,4 +1,4 @@
-// g++ main.cc -O3 -o main -I/usr/include/python2.7/ -lpython2.7
+// g++ main.cc -O3 -o main -I/usr/include/python2.7 -lpython2.7
 
 #include <bits/stdc++.h>
 #include <Python.h>
@@ -121,7 +121,7 @@ class LPSolver {
       PyRun_SimpleString("import os");
       PyRun_SimpleString("sys.path.append(os.getcwd())");
 
-      PyObject* p_name = PyString_FromString("lp_solver");
+      PyObject* p_name = PyUnicode_FromString("lp_solver");
       CheckPyObjectFailure(p_name);
 
       PyObject* p_module = PyImport_Import(p_name);
@@ -217,7 +217,7 @@ class LPSolver {
     }
 
     bool IsFeasible() {
-      int res = PyInt_AsLong(CallCvxopt(feasibility_func_));
+      int res = PyLong_AsLong(CallCvxopt(feasibility_func_));
       return res;
     }
 
@@ -257,7 +257,7 @@ class LPSolver {
         if (type == "double") {
           PyList_SET_ITEM(l, i, PyFloat_FromDouble(nums[i]));
         } else {
-          PyList_SET_ITEM(l, i, PyInt_FromLong(nums[i]));
+          PyList_SET_ITEM(l, i, PyLong_FromLong(nums[i]));
         }
       }
       return l;
