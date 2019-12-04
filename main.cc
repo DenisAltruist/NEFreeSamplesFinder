@@ -399,6 +399,7 @@ class NashDigraph {
           profit += !can_improve_col[cx][cy];
         }
       }
+
       row_jumps_ = vector<vector<int>>(n);
       for (int cx = 0; cx < n; ++cx) {
         map<vector<int>, int> occurs;
@@ -476,8 +477,8 @@ class NashDigraph {
       }
       all_possible_players_strategies_[player_idx] = GenAllPossibleChoices(player_num_of_edges_limits);
 
-      all_possible_players_strategies_[player_idx].pop_back();
-      all_possible_players_strategies_[player_idx].pop_back();
+      // all_possible_players_strategies_[player_idx].pop_back();
+      // all_possible_players_strategies_[player_idx].pop_back();
     }
 
     void CalcAllPossiblePlayersStrategies() {
@@ -1352,6 +1353,7 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     G.Print(false);
     G.Preprocess();
     G.CalcImprovementsTable();
+    G.SetTransmissionsLimit(1000);
     bool g_res = G.SolveTwoPlayersCosts(true);
     G.CheckCorrectness();
     max_ineq_sat_percentage = max(max_ineq_sat_percentage, G.GetIneqSatPercentage());
