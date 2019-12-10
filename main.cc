@@ -330,20 +330,7 @@ class NashDigraph {
         is_limited_by_iters_ = false;
     }
 
-    void AdjustEmptyTurns() {
-      for (size_t v = 0; v < turns_.size(); ++v) {
-        int turn = turns_[v];
-        if (turn == -1) {
-          continue;
-        }
-        if (edges_[v].empty()) {
-          turns_[v] = -1;
-        }
-      }
-    }
-
     void Preprocess() {
-      AdjustEmptyTurns();
       CalcAllPossiblePlayersStrategies();
     }
 
@@ -1165,6 +1152,17 @@ class NashDigraph {
       return true;
     }
 
+    bool HasOnlyOneTerminal() {
+      int num_of_terminals = 0;
+      int n = turns_.size();
+      for (int v = 0; v < n; ++v) {
+        if (edges_[v].size() == 0) {
+          num_of_terminals += 1;
+        }
+      }
+      return num_of_terminals == 1;
+    }
+
     void SetTransmissionsLimit(int x) {
       is_limited_by_iters_ = true;
       num_of_transmissions_limit_ = x;
@@ -1269,6 +1267,7 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
   const size_t kDumpProgressPeriod = 10;
   
   double max_ineq_sat_percentage = 0.0;
+  size_t best_graph_id = 0;
   vector<GraphId> graph_ids_to_check;
   vector<vector<int>> choices_to_connect_with_cycle;
   vector<vector<int>> choices_to_build_path;
@@ -1323,6 +1322,9 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
           turns[cycle_size + 1 + next_vertex_num] = (turns[cycle_size + 1 + vertex_in_path] ^ 1);
         }
       }
+      if (vertex_in_path != 0) {
+        AddEdge(cycle_size + 1 + vertex_in_path, 0, &edges); // edge to terminal from prefix vertex except start
+      }
     }
     // Edges from path to cycle
     for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
@@ -1346,7 +1348,7 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
       G.AddEmptyEdge(edges[edge_idx].first, edges[edge_idx].second, edge_idx);
     }
-    if (!G.AreAllVerticesAccessibleFromStart()) {
+    if (!G.AreAllVerticesAccessibleFromStart() || !G.HasOnlyOneTerminal()) {
       cerr << "This graph will be skipped, as not all vertices are accessible from start" << endl;
       continue;
     }
@@ -1356,6 +1358,11 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     G.SetTransmissionsLimit(1000);
     bool g_res = G.SolveTwoPlayersCosts(true);
     G.CheckCorrectness();
+    double cur_ineq_sat_percentage = G.GetIneqSatPercentage();
+    if (cur_ineq_sat_percentage > max_ineq_sat_percentage) {
+      best_graph_id = graph_id_idx;
+      max_ineq_sat_percentage = cur_ineq_sat_percentage;
+    }
     max_ineq_sat_percentage = max(max_ineq_sat_percentage, G.GetIneqSatPercentage());
     cout << "Current max inequality saturation percentage: " << max_ineq_sat_percentage << endl;
     if (g_res) {
@@ -1366,6 +1373,7 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
       assert(out.is_open());
       out << graph_id_idx << "\n";
       out << max_ineq_sat_percentage << "\n";
+      out << best_graph_id << "\n";
       out.close();
     }
   }
