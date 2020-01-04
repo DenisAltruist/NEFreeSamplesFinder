@@ -1405,6 +1405,7 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     // G.SetTransmissionsLimit(1000);
     bool g_res = G.SolveTwoPlayersCosts(true);
     G.CheckCorrectness();
+    exit(0);
     double cur_ineq_sat_percentage = G.GetIneqSatPercentage();
     if (cur_ineq_sat_percentage > max_ineq_sat_percentage) {
       best_graph_id = graph_id_idx;
