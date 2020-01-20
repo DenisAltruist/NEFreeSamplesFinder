@@ -9,53 +9,6 @@ const int kEdgeCostLimit = 25;
 
 mt19937 mt(123);
 
-class TimeCounter {
- public:
-  enum TimeUnits {
-    kMicrosecs,
-    kMillisecs,
-    kSeconds
-  };
- private:
-  std::chrono::time_point<std::chrono::steady_clock> start_time_;
-  TimeUnits time_unit_;
-  bool running;
-  static const auto now() {
-    return std::chrono::steady_clock::now();
-  }
- public:
-  TimeCounter() : time_unit_(kMillisecs), running(false) {};
-  explicit TimeCounter(TimeUnits timeUnit) : time_unit_(timeUnit), running(false) {};
-  void start() {
-    start_time_ = now();
-    running = true;
-  }
-  double finish() {
-    if (!running) {
-      assert(0);
-    }
-    running = false;
-    const std::chrono::time_point<std::chrono::steady_clock> endTime = now();
-    switch (time_unit_) {
-      case kMicrosecs: {
-        const std::chrono::duration<double, std::micro> elapsedTime = endTime - start_time_;
-        return elapsedTime.count();
-      }
-      case kMillisecs: {
-        const std::chrono::duration<double, std::milli> elapsedTime = endTime - start_time_;
-        return elapsedTime.count();
-      }
-      case kSeconds: {
-        const std::chrono::duration<double, std::ratio<1>> elapsedTime = endTime - start_time_;
-        return elapsedTime.count();
-      }
-      default: {
-        assert(0);
-      }
-    }
-  }
-};
-
 int PlusInf() {
   return numeric_limits<int>::max();
 }
@@ -254,8 +207,6 @@ class LPSolver {
     static PyObject* sol_func_;
 
     PyObject* CallCvxopt(PyObject* call_function) {
-      //TimeCounter feasibility_check_timer(TimeCounter::kSeconds);
-      //feasibility_check_timer.start(); // 0.1 for check with files and shell call.
       PyObject* p_args = PyTuple_New(2);
 
       assert(!ineqs_.empty());
@@ -315,8 +266,50 @@ void PrintVec(const vector<int>& v) {
   cout << endl;
 }
 
+struct SolverParameters {
+  bool are_pay_costs_positive; // all variables in linear systems are > 0
+  // Len of acyclic part is [left_path_len_bound; right_path_len_bound]
+  bool is_special_six_cycle_len_graph;
+  int left_path_len_bound;
+  int right_path_len_bound;
+  int cycle_size;
+  // for each vertex 'v' in acyclic part num_of_edges_to_cycle_bounds[v].first/second is [l;r] interval for number of outs in cycle
+  vector<pair<int, int>> num_of_edges_to_cycle_bounds; 
+  std::string offset_filename; // name of file, where last checked cycle id would be stored
+  bool should_shuffle_graphs; // would shuffle order of graphs to check, if true
+};
+
 class NashDigraph {
   public:
+    struct LinearFunc {
+      vector<int> cycle_part;
+      vector<int> acyclic_part;
+
+      bool IsCycle() const {
+        return !cycle_part.empty();
+      }
+
+      vector<int> GetVectorizedCycle(int vector_len) const {
+        vector<int> res(vector_len);
+        for (int edge_idx : cycle_part) {
+          res[edge_idx] = 1;
+        }
+        return res;
+      }
+
+      vector<int> GetFullEdgesSet() const {
+        vector<int> res = cycle_part;
+        for (int edge_idx : acyclic_part) {
+          res.emplace_back(edge_idx);
+        }
+        return res;
+      }
+
+      bool operator== (const LinearFunc& rhs) const {
+        return (cycle_part == rhs.cycle_part && acyclic_part == rhs.acyclic_part);
+      }
+    };
+
     NashDigraph(const string& path_to_file, bool is_complete) {
       is_complete_ = is_complete;
       ifstream in(path_to_file);
@@ -362,73 +355,79 @@ class NashDigraph {
       CalcAllPossiblePlayersStrategies();
     }
 
-    LPSolver ConfigureBaseLP(int player_num) {
+    LPSolver ConfigureBaseLP(int player_num, const SolverParameters& solver_params) {
       LPSolver res(num_of_edges_);
-      for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
-        vector<int> ineq(num_of_edges_);
-        ineq[var_idx] = -1;
-        res.PushInequality(ineq, -1);
+      if (solver_params.are_pay_costs_positive) {
+        for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
+          vector<int> ineq(num_of_edges_);
+          ineq[var_idx] = -1;
+          res.PushInequality(ineq, -1);
+        }
       }
-      std::vector<int> terminal_edge_idx_by_v(turns_.size());
-      for (size_t v = 1; v <= 6; ++v) {
-        for (auto& edge : edges_[v]) {
-          if (edge.finish != 0) {
-            vector<int> ineq(num_of_edges_);
-            size_t var_idx = edge.idx;
-            ineq[var_idx] = 1;
-            res.PushInequality(ineq, 1);
-          } else {
-            terminal_edge_idx_by_v[v] = edge.idx;
+      if (solver_params.is_special_six_cycle_len_graph) {
+        // All pay-off costs are 1 on cycle edges
+        std::vector<int> terminal_edge_idx_by_v(turns_.size());
+        for (size_t v = 1; v <= 6; ++v) {
+          for (auto& edge : edges_[v]) {
+            if (edge.finish != 0) {
+              vector<int> ineq(num_of_edges_);
+              size_t var_idx = edge.idx;
+              ineq[var_idx] = 1;
+              res.PushInequality(ineq, 1);
+            } else {
+              terminal_edge_idx_by_v[v] = edge.idx;
+            }
           }
         }
-      }
-      /*
-        о1:  а_6 < а_5 < а_2 < а_1 < а_3 < а_4 < с ;
-        о2:  а_3 < а_2 < а_6 < а_4 < а_5 < с;  а_6 < а_1 < с .
-      */
-      if (player_num != -1) {
-        vector<vector<int>> chain_inequalities;
-        if (player_num == 0) {
-          chain_inequalities.emplace_back(vector<int>({6, 5, 2, 1, 3, 4}));
-        } else {
-          chain_inequalities.emplace_back(vector<int>({3, 2, 6, 4, 5}));
-          chain_inequalities.emplace_back(vector<int>({6, 1}));
-        }
-        for (const auto& chain : chain_inequalities) {
-          for (size_t i = 1; i < chain.size(); ++i) {
-            vector<int> ineq(num_of_edges_);
-            size_t var_idx_1 = terminal_edge_idx_by_v[chain[i-1]];
-            size_t var_idx_2 = terminal_edge_idx_by_v[chain[i]];
-            ineq[var_idx_1] = 1; 
-            ineq[var_idx_2] = -1;
-            res.PushInequality(ineq, -1);
+        /*
+          Inequalities from papers on terminal edges, o1 - first player (0), o2 - second player (1)
+          о1:  а_6 < а_5 < а_2 < а_1 < а_3 < а_4 < с ;
+          о2:  а_3 < а_2 < а_6 < а_4 < а_5 < с;  а_6 < а_1 < с .
+        */
+        if (player_num != -1) {
+          vector<vector<int>> chain_inequalities;
+          if (player_num == 0) {
+            chain_inequalities.emplace_back(vector<int>({6, 5, 2, 1, 3, 4}));
+          } else {
+            chain_inequalities.emplace_back(vector<int>({3, 2, 6, 4, 5}));
+            chain_inequalities.emplace_back(vector<int>({6, 1}));
+          }
+          for (const auto& chain : chain_inequalities) {
+            for (size_t i = 1; i < chain.size(); ++i) {
+              vector<int> ineq(num_of_edges_);
+              size_t var_idx_1 = terminal_edge_idx_by_v[chain[i-1]];
+              size_t var_idx_2 = terminal_edge_idx_by_v[chain[i]];
+              ineq[var_idx_1] = 1; 
+              ineq[var_idx_2] = -1;
+              res.PushInequality(ineq, -1);
+            }
           }
         }
       }
       return res;
     }
 
-    void CalcImprovementsTable() {
+    void CalcImprovementsTable(const SolverParameters& solver_params) {
       size_t n = all_possible_players_strategies_[0].size();
       size_t m = all_possible_players_strategies_[1].size();
       vector<vector<int>> can_improve_row(n, vector<int>(m, 0));
       vector<vector<int>> can_improve_col(n, vector<int>(m, 0));
       num_of_fails_by_cell_ = vector<vector<int>>(n, vector<int>(m, 0));
-      vector<vector<vector<int>>> linear_funcs_by_cell(n, vector<vector<int>>(m));
+      vector<vector<LinearFunc>> linear_funcs_by_cell(n, vector<LinearFunc>(m));
       for (int cx = 0; cx < n; ++cx) {
         for (int cy = 0; cy < m; ++cy) {
           vector<size_t> all_players_strategy(turns_.size());
           ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
           ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
-          linear_funcs_by_cell[cx][cy] = GetLinFuncsForPlayersByGlobalStrategy(all_players_strategy);
+          linear_funcs_by_cell[cx][cy] = GetLinFuncForPlayersByGlobalStrategy(all_players_strategy);
         }
       }
     
-      LPSolver base_lp_first_player = ConfigureBaseLP(0);
-      LPSolver base_lp_second_player = ConfigureBaseLP(1);
+      LPSolver base_lp_first_player = ConfigureBaseLP(0, solver_params);
+      LPSolver base_lp_second_player = ConfigureBaseLP(1, solver_params);
       for (size_t cx = 0; cx < n; ++cx) {
         for (size_t cy = 0; cy < m; ++cy) {
-          if (linear_funcs_by_cell[cx][cy].empty()) {
+          if (linear_funcs_by_cell[cx][cy].IsCycle()) {
             continue;
           }
           LPSolver tmp_lp = base_lp_second_player;
@@ -436,7 +435,7 @@ class NashDigraph {
             if (linear_funcs_by_cell[cx][t] == linear_funcs_by_cell[cx][cy]) {
               continue;
             }
-            assert(AddInequality(linear_funcs_by_cell[cx][t], linear_funcs_by_cell[cx][cy], &tmp_lp));
+            assert(AddInequality(linear_funcs_by_cell[cx][t], linear_funcs_by_cell[cx][cy], solver_params, &tmp_lp));
           }
 
           // can_improve_row[cx][cy] = tmp_lp.IsFeasible();
@@ -448,7 +447,7 @@ class NashDigraph {
             if (linear_funcs_by_cell[t][cy] == linear_funcs_by_cell[cx][cy]) {
               continue;
             }
-            assert(AddInequality(linear_funcs_by_cell[t][cy], linear_funcs_by_cell[cx][cy], &tmp_lp));
+            assert(AddInequality(linear_funcs_by_cell[t][cy], linear_funcs_by_cell[cx][cy], solver_params, &tmp_lp));
           }
 
           // can_improve_col[cx][cy] = tmp_lp.IsFeasible();
@@ -460,7 +459,7 @@ class NashDigraph {
       for (int cx = 0; cx < n; ++cx) {
         map<vector<int>, int> occurs;
         for (int cy = 0; cy < m; ++cy) {
-          occurs[linear_funcs_by_cell[cx][cy]] = cy;
+          occurs[linear_funcs_by_cell[cx][cy].GetFullEdgesSet()] = cy;
         }
         for (auto it = occurs.begin(); it != occurs.end(); ++it) {
           int cy = it->second;
@@ -475,7 +474,7 @@ class NashDigraph {
         map<vector<int>, int> occurs;
 
         for (int cx = 0; cx < n; ++cx) {
-          occurs[linear_funcs_by_cell[cx][cy]] = cx;
+          occurs[linear_funcs_by_cell[cx][cy].GetFullEdgesSet()] = cx;
         }
         for (auto it = occurs.begin(); it != occurs.end(); ++it) {
           int cx = it->second;
@@ -643,10 +642,11 @@ class NashDigraph {
       return true;
     }
 
-    vector<int> GetLinFuncsForPlayersByGlobalStrategy(const vector<size_t>& all_players_strategy) {
+    LinearFunc GetLinFuncForPlayersByGlobalStrategy(const vector<size_t>& all_players_strategy) {
       size_t curv = start_vertex_;
       vector<int> is_vertex_used(turns_.size());
       vector<int> used_edges;
+      vector<pair<int, int>> edges_path;
       while (!is_vertex_used[curv] && turns_[curv] != -1) {
         is_vertex_used[curv] = 1;
         assert(curv < all_players_strategy.size());
@@ -654,42 +654,60 @@ class NashDigraph {
         assert(index_of_edge_to_use < edges_[curv].size());
         size_t nextv = edges_[curv][index_of_edge_to_use].finish;
         used_edges.emplace_back(edges_[curv][index_of_edge_to_use].idx);
+        edges_path.emplace_back(make_pair(curv, index_of_edge_to_use));
         curv = nextv;
       }
+      LinearFunc res;
       if (is_vertex_used[curv]) { // got cycle
-        used_edges.clear();
-        return used_edges;
+        bool is_already_in_cycle = false;
+        for (const auto& edge_coords : edges_path) {
+          const auto& edge = edges_[edge_coords.first][edge_coords.second];
+          if (!is_already_in_cycle) {
+            res.acyclic_part.emplace_back(edge.idx);
+          } else {
+            res.cycle_part.emplace_back(edge.idx);
+          }
+          if (edge.finish == curv) {
+            is_already_in_cycle = true;
+          }
+        }
+        return res;
       }
-      vector<int> res(num_of_edges_);
-      for (size_t edge_idx : used_edges) {
-        assert(edge_idx < num_of_edges_);
-        res[edge_idx] = 1;
-      }
+      res.acyclic_part = used_edges;
       return res;
     }
     
     // returns true if improved by addition
-    bool AddInequality(const vector<int>& old_func, const vector<int>& new_func, LPSolver* lp_solver) {
-      if (old_func.empty()) {
-        if (!new_func.empty()) {
-          return true;
+    bool AddInequality(const LinearFunc& old_func, const LinearFunc& new_func, const SolverParameters& solver_params, LPSolver* lp_solver) {
+      if (old_func.IsCycle() || new_func.IsCycle()) {
+        if (solver_params.are_pay_costs_positive) {
+          if (old_func.IsCycle()) {
+            if (!new_func.IsCycle()) {
+              return true;
+            }
+            return false;
+          }
+          return false;
         }
-        return false;
-      }
-      if (new_func.empty()) {
-        return false;
+        if (old_func.IsCycle()) {
+          lp_solver->PushInequality(old_func.GetVectorizedCycle(num_of_edges_), 1);
+        }
+        lp_solver->PushInequality(new_func.GetVectorizedCycle(num_of_edges_), -1);
+        return true;
       }
       vector<int> ineq(num_of_edges_);
-      assert(old_func.size() == num_of_edges_);
-      assert(new_func.size() == num_of_edges_);
-      for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
-        ineq[var_idx] = new_func[var_idx] - old_func[var_idx];
+      for (int edge_idx : new_func.acyclic_part) {
+        ineq[edge_idx] += 1;
+      }
+      for (int edge_idx : old_func.acyclic_part) {
+        ineq[edge_idx] -= 1;
       }
       return lp_solver->PushInequality(ineq, -1);
     }
 
     bool GoFirstPlayer(
-      const vector<vector<vector<int>>>& linear_funcs_by_cell,
+      const vector<vector<LinearFunc>>& linear_funcs_by_cell,
+      const SolverParameters& solver_params,
       int cx, 
       int cy,
       vector<vector<int>>* is_cell_used, 
@@ -703,13 +721,13 @@ class NashDigraph {
         if (linear_funcs_by_cell[tx][cy] == linear_funcs_by_cell[cx][cy]) {
           continue;
         }
-        const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy];
-        assert(!best_linear_func.empty());
+        const LinearFunc& best_linear_func = linear_funcs_by_cell[tx][cy];
+        assert(!best_linear_func.IsCycle());
         for (int func_idx : col_jumps_[cy]) {
           if (func_idx == tx) {
             continue;
           }
-          assert(AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], lp_x));
+          assert(AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, lp_x));
         }
         if (lp_x->IsFeasible()) {
           vector<int> colored_cells;
@@ -722,7 +740,7 @@ class NashDigraph {
               (*is_cell_used)[wx][cy] = 1;
             }
           }
-          bool branch_result = SolveTwoPlayersCostsRec(linear_funcs_by_cell, tx, cy, 1, is_cell_used, lp_x, lp_y);
+          bool branch_result = SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, tx, cy, 1, is_cell_used, lp_x, lp_y);
           if (branch_result) {
             return true;
           }
@@ -738,7 +756,8 @@ class NashDigraph {
     }
 
     bool GoSecondPlayer(
-      const vector<vector<vector<int>>>& linear_funcs_by_cell,
+      const vector<vector<LinearFunc>>& linear_funcs_by_cell,
+      const SolverParameters& solver_params,
       int cx, 
       int cy,
       vector<vector<int>>* is_cell_used, 
@@ -752,13 +771,13 @@ class NashDigraph {
         if (linear_funcs_by_cell[cx][ty] == linear_funcs_by_cell[cx][cy]) { 
           continue;
         }
-        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty];
-        assert(!best_linear_func.empty());
+        const LinearFunc& best_linear_func = linear_funcs_by_cell[cx][ty];
+        assert(!best_linear_func.IsCycle());
         for (int func_idx : row_jumps_[cx]) {
           if (func_idx == ty) {
             continue;
           }
-          assert(AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], lp_y));
+          assert(AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, lp_y));
         }
         if (lp_y->IsFeasible()) {
           vector<int> colored_cells;
@@ -771,7 +790,7 @@ class NashDigraph {
               (*is_cell_used)[cx][wy] = 1;
             }
           }
-          bool branch_result = SolveTwoPlayersCostsRec(linear_funcs_by_cell, cx, ty, 0, is_cell_used, lp_x, lp_y);
+          bool branch_result = SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, cx, ty, 0, is_cell_used, lp_x, lp_y);
           if (branch_result) {
             return true;
           }
@@ -787,7 +806,8 @@ class NashDigraph {
     }
 
     bool SolveTwoPlayersCostsRec(
-      const vector<vector<vector<int>>>& linear_funcs_by_cell,
+      const vector<vector<LinearFunc>>& linear_funcs_by_cell,
+      const SolverParameters& solver_params,
       int cx, 
       int cy,
       int direction, // -1 for first cell, 0 - GoFirstPlayer, 1 - GoSecondPlayer
@@ -837,31 +857,17 @@ class NashDigraph {
         if (max_num_of_fails == -1) {
           return true;
         }
-        return SolveTwoPlayersCostsRec(linear_funcs_by_cell, wx, wy, -1, is_cell_used, lp_x, lp_y);
-       /*
-        if (!(*is_cell_used)[last_failed_cx_][last_failed_cy_]) {
-          return SolveTwoPlayersCostsRec(linear_funcs_by_cell, last_failed_cx_, last_failed_cy_, -1, is_cell_used, lp_x, lp_y);
-        }
-      
-        for (int tx = 0; tx < n; ++tx) {
-          for (int ty = 0; ty < m; ++ty) {
-            if (!(*is_cell_used)[tx][ty]) {
-              return SolveTwoPlayersCostsRec(linear_funcs_by_cell, tx, ty, -1, is_cell_used, lp_x, lp_y);
-            }
-          }
-        }
-        return true;
-        */
+        return SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, wx, wy, -1, is_cell_used, lp_x, lp_y);
       }
       (*is_cell_used)[cx][cy] = 1;
       // randomizing branch's order
       
       if (direction == -1) {
-        bool res = GoFirstPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_x, lp_y);
+        bool res = GoFirstPlayer(linear_funcs_by_cell, solver_params, cx, cy, is_cell_used, lp_x, lp_y);
         if (res) {
           return true;
         }
-        res = GoSecondPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_x, lp_y);
+        res = GoSecondPlayer(linear_funcs_by_cell, solver_params, cx, cy, is_cell_used, lp_x, lp_y);
         if (res) {
           return true;
         }
@@ -873,7 +879,7 @@ class NashDigraph {
       }
 
       if (direction == 0) {
-        bool res = GoFirstPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_x, lp_y);
+        bool res = GoFirstPlayer(linear_funcs_by_cell, solver_params, cx, cy, is_cell_used, lp_x, lp_y);
         if (res) {
           return true;
         }
@@ -884,7 +890,7 @@ class NashDigraph {
         return false;
       }
 
-      bool res = GoSecondPlayer(linear_funcs_by_cell, cx, cy, is_cell_used, lp_x, lp_y);
+      bool res = GoSecondPlayer(linear_funcs_by_cell, solver_params, cx, cy, is_cell_used, lp_x, lp_y);
       if (res) {
         return true;
       }
@@ -899,7 +905,7 @@ class NashDigraph {
       return ineq_sat_percentage_;
     }
 
-    bool SolveTwoPlayersCosts(bool are_costs_positive) {
+    bool SolveTwoPlayersCosts(const SolverParameters& solver_params) {
       assert(num_of_players_ == 2);
       int n = all_possible_players_strategies_[0].size();
       int m = all_possible_players_strategies_[1].size();
@@ -909,295 +915,21 @@ class NashDigraph {
         return false;
       }
       vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
-      vector<vector<vector<int>>> linear_funcs_by_cell(
+      vector<vector<LinearFunc>> linear_funcs_by_cell(
         n, 
-        vector<vector<int>>(m) // if vector is empty, then both vectors should be empty and this is a cycle
+        vector<LinearFunc>(m) // if vector is empty, then both vectors should be empty and this is a cycle
       );
       for (int cx = 0; cx < n; ++cx) {
         for (int cy = 0; cy < m; ++cy) {
           vector<size_t> all_players_strategy(turns_.size());
           ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
           ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
-          linear_funcs_by_cell[cx][cy] = GetLinFuncsForPlayersByGlobalStrategy(all_players_strategy);
+          linear_funcs_by_cell[cx][cy] = GetLinFuncForPlayersByGlobalStrategy(all_players_strategy);
         }
       }
-      LPSolver lp_x;
-      LPSolver lp_y;
-      if (are_costs_positive) {
-        lp_x = ConfigureBaseLP(0);
-        lp_y = ConfigureBaseLP(1);
-      }
-      return SolveTwoPlayersCostsRec(linear_funcs_by_cell, 0, 0, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
-    }
-
-    bool SolveThreePlayersCosts() {
-      int n = all_possible_players_strategies_[0].size();
-      int m = all_possible_players_strategies_[1].size();
-      int k = all_possible_players_strategies_[2].size();
-      ineq_sat_percentage_ = -1.0;
-      cerr << "Num of strategies for players: " << n << " " << m << " " << k << endl;
-      if (n == 0 || m == 0 || k == 0) {
-        return false;
-      }
-      vector<vector<vector<int>>> is_cell_used(n, vector<vector<int>>(m, vector<int>(k)));
-      vector<vector<vector<vector<int>>>> linear_func_by_cell(n, vector<vector<vector<int>>>(m, vector<vector<int>>(k)));
-      for (int cx = 0; cx < n; ++cx) {
-        for (int cy = 0; cy < m; ++cy) {
-          for (int cz = 0; cz < k; ++cz) {
-            vector<size_t> all_players_strategy(turns_.size());
-            ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
-            ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
-            ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[2][cz], 2, &all_players_strategy);
-            linear_func_by_cell[cx][cy][cz] = GetLinFuncsForPlayersByGlobalStrategy(all_players_strategy);
-          }
-        }
-      }
-
-      LPSolver lp_x(num_of_edges_), lp_y(num_of_edges_), lp_z(num_of_edges_);
-      for (size_t var_idx = 0; var_idx < num_of_edges_; ++var_idx) {
-        vector<int> ineq(num_of_edges_);
-        ineq[var_idx] = -1;
-        lp_x.PushInequality(ineq, -1);
-        lp_y.PushInequality(ineq, -1);
-        lp_z.PushInequality(ineq, -1);
-      }      
-      return SolveThreePlayersCostsRec(linear_func_by_cell, 0, 0, 0, &is_cell_used, &lp_x, &lp_y, &lp_z);
-    }
-
-
-    bool GoX(
-      const vector<vector<vector<vector<int>>>>& linear_funcs_by_cell,
-      int cx,
-      int cy,
-      int cz,
-      vector<vector<vector<int>>>* is_cell_used,
-      LPSolver* lp_x,
-      LPSolver* lp_y,
-      LPSolver* lp_z
-    ) {
-      rec_stack.push_back('X');
-      int n = is_cell_used->size();
-      for (int tx = 0; tx < n; ++tx) {
-        size_t old_lp_solver_size = lp_x->Size();
-        if (linear_funcs_by_cell[tx][cy][cz] == linear_funcs_by_cell[cx][cy][cz]) { 
-          continue;
-        }
-        
-        const vector<int>& best_linear_func = linear_funcs_by_cell[tx][cy][cz];
-        if (best_linear_func.empty()) {
-          continue;
-        }
-        for (int func_idx = 0; func_idx < n; ++func_idx) {
-          if (linear_funcs_by_cell[func_idx][cy][cz] == linear_funcs_by_cell[tx][cy][cz]) {
-            continue;
-          }
-          assert(AddInequality(linear_funcs_by_cell[func_idx][cy][cz], linear_funcs_by_cell[tx][cy][cz], lp_x));
-        }
-        if (lp_x->IsFeasible()) {
-          vector<int> colored_cells;
-          for (int wx = 0; wx < n; ++wx) {
-            if (linear_funcs_by_cell[tx][cy][cz] == linear_funcs_by_cell[wx][cy][cz]) {
-              continue;
-            }
-            if (!(*is_cell_used)[wx][cy][cz]) {
-              colored_cells.emplace_back(wx);
-              (*is_cell_used)[wx][cy][cz] = 1;
-            }
-          }
-          bool branch_result = SolveThreePlayersCostsRec(linear_funcs_by_cell, tx, cy, cz, is_cell_used, lp_x, lp_y, lp_z);
-          if (branch_result) {
-            return true;
-          }
-          for (int colored_cell : colored_cells) {
-            (*is_cell_used)[colored_cell][cy][cz] = 0;
-          }
-        }
-      
-        while (lp_x->Size() != old_lp_solver_size) {
-          lp_x->PopInequality();
-        } 
-      }
-      rec_stack.pop_back();
-      return false;
-    }
-
-    bool GoY(
-      const vector<vector<vector<vector<int>>>>& linear_funcs_by_cell,
-      int cx,
-      int cy,
-      int cz,
-      vector<vector<vector<int>>>* is_cell_used,
-      LPSolver* lp_x,
-      LPSolver* lp_y,
-      LPSolver* lp_z
-    ) {
-      rec_stack.push_back('Y');
-      int m = (*is_cell_used)[0].size();
-      for (int ty = 0; ty < m; ++ty) {
-        size_t old_lp_solver_size = lp_y->Size();
-        if (linear_funcs_by_cell[cx][ty][cz] == linear_funcs_by_cell[cx][cy][cz]) { 
-          continue;
-        }
-        
-        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][ty][cz];
-        if (best_linear_func.empty()) {
-          continue;
-        }
-        for (int func_idx = 0; func_idx < m; ++func_idx) {
-          if (linear_funcs_by_cell[cx][func_idx][cz] == linear_funcs_by_cell[cx][ty][cz]) {
-            continue;
-          }
-          assert(AddInequality(linear_funcs_by_cell[cx][func_idx][cz], linear_funcs_by_cell[cx][ty][cz], lp_y));
-        }
-        if (lp_y->IsFeasible()) {
-          vector<int> colored_cells;
-          for (int wy = 0; wy < m; ++wy) {
-            if (linear_funcs_by_cell[cx][wy][cz] == linear_funcs_by_cell[cx][ty][cz]) {
-              continue;
-            }
-            if (!(*is_cell_used)[cx][wy][cz]) {
-              colored_cells.emplace_back(wy);
-              (*is_cell_used)[cx][wy][cz] = 1;
-            }
-          }
-          bool branch_result = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, ty, cz, is_cell_used, lp_x, lp_y, lp_z);
-          if (branch_result) {
-            return true;
-          }
-          for (int colored_cell : colored_cells) {
-            (*is_cell_used)[cx][colored_cell][cz] = 0;
-          }
-        }
-      
-        while (lp_y->Size() != old_lp_solver_size) {
-          lp_y->PopInequality();
-        } 
-      }
-      rec_stack.pop_back();
-      return false;
-    }
-
-    bool GoZ(
-      const vector<vector<vector<vector<int>>>>& linear_funcs_by_cell,
-      int cx,
-      int cy,
-      int cz,
-      vector<vector<vector<int>>>* is_cell_used,
-      LPSolver* lp_x,
-      LPSolver* lp_y,
-      LPSolver* lp_z
-    ) {
-      rec_stack.push_back('Z');
-      int k = (*is_cell_used)[0][0].size();
-      for (int tz = 0; tz < k; ++tz) {
-        size_t old_lp_solver_size = lp_z->Size();
-        if (linear_funcs_by_cell[cx][cy][tz] == linear_funcs_by_cell[cx][cy][cz]) { 
-          continue;
-        }
-        
-        const vector<int>& best_linear_func = linear_funcs_by_cell[cx][cy][tz];
-        if (best_linear_func.empty()) {
-          continue;
-        }
-        for (int func_idx = 0; func_idx < k; ++func_idx) {
-          if (linear_funcs_by_cell[cx][cy][func_idx] == linear_funcs_by_cell[cx][cy][tz]) {
-            continue;
-          }
-          assert(AddInequality(linear_funcs_by_cell[cx][cy][func_idx], linear_funcs_by_cell[cx][cy][tz], lp_z));
-        }
-        if (lp_z->IsFeasible()) {
-          vector<int> colored_cells;
-          for (int wz = 0; wz < k; ++wz) {
-            if (linear_funcs_by_cell[cx][cy][wz] == linear_funcs_by_cell[cx][cy][tz]) {
-              continue;
-            }
-            if (!(*is_cell_used)[cx][cy][wz]) {
-              colored_cells.emplace_back(wz);
-              (*is_cell_used)[cx][cy][wz] = 1;
-            }
-          }
-          bool branch_result = SolveThreePlayersCostsRec(linear_funcs_by_cell, cx, cy, tz, is_cell_used, lp_x, lp_y, lp_z);
-          if (branch_result) {
-            return true;
-          }
-          for (int colored_cell : colored_cells) {
-            (*is_cell_used)[cx][cy][colored_cell] = 0;
-          }
-        }
-      
-        while (lp_z->Size() != old_lp_solver_size) {
-          lp_z->PopInequality();
-        } 
-      }
-      rec_stack.pop_back();
-      return false;
-    }
-
-    bool SolveThreePlayersCostsRec(
-      const vector<vector<vector<vector<int>>>>& linear_funcs_by_cell,
-      int cx,
-      int cy,
-      int cz,
-      vector<vector<vector<int>>>* is_cell_used,
-      LPSolver* lp_x,
-      LPSolver* lp_y,
-      LPSolver* lp_z
-    ) {
-      int n = is_cell_used->size();
-      int m = (*is_cell_used)[0].size();
-      int k = (*is_cell_used)[0][0].size();
-
-      if ((*is_cell_used)[cx][cy][cz]) {
-        for (int tx = 0; tx < n; ++tx) {
-          for (int ty = 0; ty < m; ++ty) {
-            for (int tz = 0; tz < k; ++tz) {
-              if (!(*is_cell_used)[tx][ty][tz]) {
-                return SolveThreePlayersCostsRec(linear_funcs_by_cell, tx, ty, tz, is_cell_used, lp_x, lp_y, lp_z);
-              }
-            }
-          }
-        }
-        return true;
-      }
-      size_t num_of_used_cells = 0;
-      for (int tx = 0; tx < n; ++tx) {
-        for (int ty = 0; ty < m; ++ty) {
-          for (int tz = 0; tz < k; ++tz) {
-            if ((*is_cell_used)[tx][ty][tz]) {
-              num_of_used_cells++;
-            }
-          }
-        }
-      }
-      cout << double(num_of_used_cells) / (n * m * k) << endl;
-      // cout << rec_stack << endl;
-      (*is_cell_used)[cx][cy][cz] = 1;
-
-      vector<function<bool()>> branch_calls;
-
-      branch_calls.emplace_back([this, &linear_funcs_by_cell, &cx, &cy, &cz, &is_cell_used, &lp_x, &lp_y, &lp_z]() { 
-        return GoY(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z); 
-      });
-
-      branch_calls.emplace_back([this, &linear_funcs_by_cell, &cx, &cy, &cz, &is_cell_used, &lp_x, &lp_y, &lp_z]() { 
-        return GoX(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z); 
-      });
-
-      branch_calls.emplace_back([this, &linear_funcs_by_cell, &cx, &cy, &cz, &is_cell_used, &lp_x, &lp_y, &lp_z]() { 
-        return GoZ(linear_funcs_by_cell, cx, cy, cz, is_cell_used, lp_x, lp_y, lp_z); 
-      });
-        
-      Shuffle(&branch_calls);
-
-      for (auto& branch_call : branch_calls) {
-        bool res = branch_call();
-        if (res) {
-          return true;
-        }
-      }
-
-      (*is_cell_used)[cx][cy][cz] = 0;
-      return false;
+      LPSolver lp_x = ConfigureBaseLP(0, solver_params);
+      LPSolver lp_y = ConfigureBaseLP(1, solver_params);
+      return SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, 0, 0, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
     }
 
     void Dfs(int cur_vertex, vector<int>* is_vertex_visited) {
@@ -1340,8 +1072,8 @@ vector<vector<int>> GenAllPossibleChoicesForMasks(const vector<int>& limits, con
   return res;
 }
 
-bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int, int>>& bounds, const std::string& offset_filename, bool should_shuffle) {
-  ifstream in(offset_filename);
+bool TryToSolve(const SolverParameters& solver_params) {
+  ifstream in(solver_params.offset_filename);
   assert(in.is_open());
   int offset = 0;
   in >> offset;
@@ -1354,10 +1086,10 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
   vector<GraphId> graph_ids_to_check;
   vector<vector<int>> choices_to_connect_with_cycle;
   vector<vector<int>> choices_to_build_path;
-  for (int path_size = ps_lb; path_size <= ps_rb; ++path_size) {
+  for (int path_size = solver_params.left_path_len_bound; path_size <= solver_params.right_path_len_bound; ++path_size) {
 
-    vector<int> path_to_cycle_edges_ways_limits(path_size, (1 << cycle_size));
-    choices_to_connect_with_cycle = GenAllPossibleChoicesForMasks(path_to_cycle_edges_ways_limits, bounds);
+    vector<int> path_to_cycle_edges_ways_limits(path_size, (1 << solver_params.cycle_size));
+    choices_to_connect_with_cycle = GenAllPossibleChoicesForMasks(path_to_cycle_edges_ways_limits, solver_params.num_of_edges_to_cycle_bounds);
    
     vector<int> path_to_path_edges_ways_limits(path_size);
     for (int vertex_in_path = 1; vertex_in_path <= path_size; ++vertex_in_path) {
@@ -1368,11 +1100,11 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
 
     for (size_t build_path_choice_idx = 0; build_path_choice_idx < choices_to_build_path.size(); ++build_path_choice_idx) {
       for (size_t cycle_choice_idx = 0; cycle_choice_idx < choices_to_connect_with_cycle.size(); ++cycle_choice_idx) {
-        graph_ids_to_check.emplace_back(GraphId{cycle_size, path_size, build_path_choice_idx, cycle_choice_idx});
+        graph_ids_to_check.emplace_back(GraphId{solver_params.cycle_size, path_size, build_path_choice_idx, cycle_choice_idx});
       }
     }
   }
-  if (should_shuffle) {
+  if (solver_params.should_shuffle_graphs) {
     Shuffle(&graph_ids_to_check);
   }
   for (size_t graph_id_idx = offset; graph_id_idx < graph_ids_to_check.size(); ++graph_id_idx) {
@@ -1437,9 +1169,8 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
     }
     G.Print(false);
     G.Preprocess();
-    G.CalcImprovementsTable();
-    // G.SetTransmissionsLimit(1000);
-    bool g_res = G.SolveTwoPlayersCosts(true);
+    G.CalcImprovementsTable(solver_params);
+    bool g_res = G.SolveTwoPlayersCosts(solver_params);
     G.CheckCorrectness();
     double cur_ineq_sat_percentage = G.GetIneqSatPercentage();
     if (cur_ineq_sat_percentage > max_ineq_sat_percentage) {
@@ -1452,7 +1183,7 @@ bool TryToSolve(int ps_lb, int ps_rb, int cycle_size, const std::vector<pair<int
       return true;
     }
     if (graph_id_idx % kDumpProgressPeriod == 0) {
-      ofstream out(offset_filename);
+      ofstream out(solver_params.offset_filename);
       assert(out.is_open());
       out << graph_id_idx << "\n";
       out << max_ineq_sat_percentage << "\n";
@@ -1475,7 +1206,18 @@ int main() {
   // G.CheckCorrectness();
   //cout << G.GetIneqSatPercentage() << endl;
   //cout << G.CountNumOfNE() << endl;
-  TryToSolve(2, 3, 6, {{0, 2}, {0, 2}, {0, 2}, {0, 0}}, "offset.txt", true);
+  TryToSolve(
+    SolverParameters{
+      .are_pay_costs_positive = false,
+      .is_special_six_cycle_len_graph = false, 
+      .left_path_len_bound = 2,
+      .right_path_len_bound = 3,
+      .cycle_size = 6,
+      .num_of_edges_to_cycle_bounds = {{0, 2}, {0, 2}, {0, 2}},
+      .offset_filename = "offset.txt",
+      .should_shuffle_graphs = true
+    }
+  );
   //cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732 // 0.991 930
   // 2250 - for cycle_size = 3
   // 320 for {3, 3, 3} and cycle_size = 6
