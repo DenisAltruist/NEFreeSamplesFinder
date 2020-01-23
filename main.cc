@@ -277,6 +277,7 @@ struct SolverParameters {
   vector<pair<int, int>> num_of_edges_to_cycle_bounds; 
   std::string offset_filename; // name of file, where last checked cycle id would be stored
   bool should_shuffle_graphs; // would shuffle order of graphs to check, if true
+  bool need_to_remove_one_strategy; // for test purposes
 };
 
 class NashDigraph {
@@ -337,7 +338,7 @@ class NashDigraph {
       }
       num_of_players_ = num_of_players;
       num_of_edges_ = num_of_edges;
-      Preprocess();
+      Preprocess(SolverParameters{});
       is_limited_by_iters_ = false;
     }
 
@@ -351,8 +352,8 @@ class NashDigraph {
         is_limited_by_iters_ = false;
     }
 
-    void Preprocess() {
-      CalcAllPossiblePlayersStrategies();
+    void Preprocess(const SolverParameters& solver_params) {
+      CalcAllPossiblePlayersStrategies(solver_params);
     }
 
     LPSolver ConfigureBaseLP(int player_num, const SolverParameters& solver_params) {
@@ -523,20 +524,28 @@ class NashDigraph {
     void CalcPlayerStrategies(size_t player_idx) {
       size_t n = turns_.size();
       vector<int> player_num_of_edges_limits;
-      vector<size_t> player_own_vertices;
       for (size_t v = 0; v < n; ++v) {
         if (turns_[v] == static_cast<int>(player_idx)) {
           player_num_of_edges_limits.emplace_back(edges_[v].size());
-          player_own_vertices.emplace_back(v);
         }
       }
       all_possible_players_strategies_[player_idx] = GenAllPossibleChoices(player_num_of_edges_limits);
     }
 
-    void CalcAllPossiblePlayersStrategies() {
+    void CalcAllPossiblePlayersStrategies(const SolverParameters& solver_params) {
       all_possible_players_strategies_.resize(num_of_players_);
       for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
         CalcPlayerStrategies(player_idx);
+        if (solver_params.need_to_remove_one_strategy) {
+          if (player_idx == 1) {
+            PrintAllPlayerStrategies(1);
+            Shuffle(&all_possible_players_strategies_[1]);
+            assert(!all_possible_players_strategies_[1].empty());
+            all_possible_players_strategies_[1].pop_back();
+            cout << "Strategies after deletion:\n\n";
+            PrintAllPlayerStrategies(1); 
+          }
+        }
       }
     }
 
@@ -905,6 +914,29 @@ class NashDigraph {
       return ineq_sat_percentage_;
     }
 
+    void PrintAllPlayerStrategies(int player_num) {
+      vector<int> own_player_vectices;
+      for (size_t v = 0; v < turns_.size(); ++v) {
+        if (turns_[v] == player_num) {
+          own_player_vectices.emplace_back(v);
+        }
+      }
+      
+      for (const vector<int>& strategy : all_possible_players_strategies_[player_num]) {
+        ostringstream ostr;
+        assert(strategy.size() == own_player_vectices.size());
+        for (size_t vertex_idx = 0; vertex_idx < strategy.size(); ++vertex_idx) {
+          int v = own_player_vectices[vertex_idx];
+          const auto& edge = edges_[v][strategy[vertex_idx]];
+          if (vertex_idx != 0) {
+            ostr << " | ";
+          }
+          ostr << v << "->"  << edge.finish;
+        }
+        cout << ostr.str() << endl;
+      }
+    }
+
     bool SolveTwoPlayersCosts(const SolverParameters& solver_params) {
       assert(num_of_players_ == 2);
       int n = all_possible_players_strategies_[0].size();
@@ -1168,7 +1200,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
       continue;
     }
     G.Print(false);
-    G.Preprocess();
+    G.Preprocess(solver_params);
     G.CalcImprovementsTable(solver_params);
     bool g_res = G.SolveTwoPlayersCosts(solver_params);
     G.CheckCorrectness();
@@ -1194,6 +1226,120 @@ bool TryToSolve(const SolverParameters& solver_params) {
   return false;
 }
 
+bool CheckIfTreeValidForTest(const vector<vector<int>>& edges, const vector<int>& parent, const vector<int>& turns) {
+  int n = turns.size();
+  int num_of_even_pos = 0;
+  int num_of_odd_pos = 0;
+  for (int x : turns) {
+    if (x == 0) {
+      num_of_even_pos++;
+    } else if (x == 1) {
+      num_of_odd_pos++;
+    }
+  }
+  if (num_of_even_pos < 2 || num_of_odd_pos < 2) {
+    cout << "Invalid number of positions condition" << endl;
+    return false; // we want at least 2 position for both players
+  }
+  int num_of_subtrees[2] = {0, 0};
+  for (int v = 1; v < n; ++v) {
+    if (turns[v] == -1) {
+      continue;
+    }
+    int curv = parent[v];
+    bool is_subtree_root = true;
+    while (curv != 0) {
+      if (turns[curv] == turns[v]) {
+        is_subtree_root = false;
+        break;
+      }
+      curv = parent[curv];
+    }
+    num_of_subtrees[turns[v]] += is_subtree_root;
+  }
+  if (num_of_subtrees[0] < 2 || num_of_subtrees[1] < 2) {
+    cout << "Invalid pathways condition" << endl;
+    return false; // We want at least two vertices for both players on different pathways from root
+  }
+  return true;
+}
+
+void CheckTreeTests() {
+  int kMaxTreeSize = 10;
+  int kMinTreeSize = 7;
+  int kNumOfIters = 100;
+  for (int it = 0; it < kNumOfIters; ++it) {
+    int tree_size = GetRandomInt(kMinTreeSize, kMaxTreeSize);
+    vector<int> parent(tree_size);
+    vector<int> turns(tree_size);
+    // Logariphmic tree size
+    for (int i = 1; i < tree_size; ++i) {
+      parent[i] = GetRandomInt(0, i-1);
+    }
+    vector<vector<int>> edges_by_vertex(tree_size);
+    for (int i = 1; i < tree_size; ++i) {
+      edges_by_vertex[parent[i]].emplace_back(i);
+    }
+    queue<int> q;
+    q.push(0);
+    vector<pair<int, int>> edges;
+    while (!q.empty()) {
+      int v = q.front();
+      q.pop();
+      for (int u : edges_by_vertex[v]) {
+        edges.emplace_back(make_pair(v, u));
+        turns[u] = turns[v] ^ 1;
+        q.push(u);
+      }
+      if (edges_by_vertex[v].empty()) {
+        turns[v] = -1;
+      }
+    }
+    int n = tree_size;
+    for (int v = 1; v < tree_size; ++v) {
+      if (turns[v] == -1) {
+        continue;
+      }
+      if (edges_by_vertex[v].size() < 2) {
+        parent.resize(n + 1); // n^2 totally, doesn't matter
+        parent[n] = v;
+        turns.resize(n + 1);
+        turns[n] = -1;
+        edges_by_vertex.resize(n + 1);
+        edges_by_vertex[v].emplace_back(n);
+        edges.emplace_back(make_pair(v, n));
+        n++;
+      }
+    }
+    cout << "Tree size: " << tree_size << " " << n << endl;
+    tree_size = n;
+    if (!CheckIfTreeValidForTest(edges_by_vertex, parent, turns)) {
+      cout << "Got invalid tree for tests, continue ..." << endl;
+      continue;
+    }
+    NashDigraph G(turns, 2, 0);
+    for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
+      G.AddEmptyEdge(edges[edge_idx].first, edges[edge_idx].second, edge_idx);
+    }
+    G.Print(false);
+    auto solver_params = 
+      SolverParameters{
+        .are_pay_costs_positive = true,
+        .is_special_six_cycle_len_graph = false, 
+        .left_path_len_bound = 2,
+        .right_path_len_bound = 3,
+        .cycle_size = 6,
+        .num_of_edges_to_cycle_bounds = {{0, 2}, {0, 2}, {0, 2}},
+        .offset_filename = "offset.txt",
+        .should_shuffle_graphs = true,
+        .need_to_remove_one_strategy = true
+      };
+    G.Preprocess(solver_params);
+    G.CalcImprovementsTable(solver_params);
+    assert(G.SolveTwoPlayersCosts(solver_params));
+  }
+}
+
 int main() {
   LPSolver::LaunchPython();
   //freopen("input.txt", "r", stdin);
@@ -1206,6 +1352,8 @@ int main() {
   // G.CheckCorrectness();
   //cout << G.GetIneqSatPercentage() << endl;
   //cout << G.CountNumOfNE() << endl;
+  CheckTreeTests();
+  /*
   TryToSolve(
     SolverParameters{
       .are_pay_costs_positive = false,
@@ -1218,6 +1366,7 @@ int main() {
       .should_shuffle_graphs = true
     }
   );
+  */
   //cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732 // 0.991 930
   // 2250 - for cycle_size = 3
   // 320 for {3, 3, 3} and cycle_size = 6
