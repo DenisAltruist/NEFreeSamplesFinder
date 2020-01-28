@@ -188,6 +188,17 @@ class LPSolver {
       return bounds_.size();
     }
 
+    void PrintIneqs() {
+      for (size_t ineq_idx = 0; ineq_idx < ineqs_.size(); ++ineq_idx) {
+        for (int x : ineqs_[ineq_idx]) {
+          cout << x << " ";
+        }
+        cout << "<= " << bounds_[ineq_idx];
+        cout << "\n";
+      }
+      cout << "\n";
+    }
+
     bool IsFeasible() {
       if (!last_sol_.empty()) {
         bool res = CheckSolution(last_sol_);
@@ -290,10 +301,10 @@ class NashDigraph {
         return !cycle_part.empty();
       }
 
-      vector<int> GetVectorizedCycle(int vector_len) const {
+      vector<int> GetVectorizedCycle(int vector_len, int var_sign) const {
         vector<int> res(vector_len);
         for (int edge_idx : cycle_part) {
-          res[edge_idx] = 1;
+          res[edge_idx] = var_sign;
         }
         return res;
       }
@@ -303,7 +314,21 @@ class NashDigraph {
         for (int edge_idx : acyclic_part) {
           res.emplace_back(edge_idx);
         }
+        sort(res.begin(), res.end());
         return res;
+      }
+
+      void Print() const {
+        cout << "cyclic part:";
+        for (int x : cycle_part) {
+          cout << " " << x;
+        }
+        cout << "\n";
+        cout << "acyclic part:";
+        for (int x : acyclic_part) {
+          cout << " " << x;
+        }
+        cout << "\n\n";
       }
 
       bool operator== (const LinearFunc& rhs) const {
@@ -428,30 +453,7 @@ class NashDigraph {
       LPSolver base_lp_second_player = ConfigureBaseLP(1, solver_params);
       for (size_t cx = 0; cx < n; ++cx) {
         for (size_t cy = 0; cy < m; ++cy) {
-          if (linear_funcs_by_cell[cx][cy].IsCycle()) {
-            continue;
-          }
-          LPSolver tmp_lp = base_lp_second_player;
-          for (size_t t = 0; t < m; ++t) {
-            if (linear_funcs_by_cell[cx][t] == linear_funcs_by_cell[cx][cy]) {
-              continue;
-            }
-            assert(AddInequality(linear_funcs_by_cell[cx][t], linear_funcs_by_cell[cx][cy], solver_params, &tmp_lp));
-          }
-
-          // can_improve_row[cx][cy] = tmp_lp.IsFeasible();
           can_improve_row[cx][cy] = true;
-
-          tmp_lp = base_lp_first_player;
-
-          for (size_t t = 0; t < n; ++t) {
-            if (linear_funcs_by_cell[t][cy] == linear_funcs_by_cell[cx][cy]) {
-              continue;
-            }
-            assert(AddInequality(linear_funcs_by_cell[t][cy], linear_funcs_by_cell[cx][cy], solver_params, &tmp_lp));
-          }
-
-          // can_improve_col[cx][cy] = tmp_lp.IsFeasible();
           can_improve_col[cx][cy] = true;
         }
       }
@@ -576,10 +578,11 @@ class NashDigraph {
 
     void CheckCorrectness() {
       vector<pair<int, int>> sol = GetSolution();
+      cout << "Solutions in format: (edge index, cost_1, cost_2)\n";
       for (size_t v = 0; v < turns_.size(); ++v) {
         for (auto& edge : edges_[v]) {
           assert(edge.idx < sol.size());
-          cout << sol[edge.idx].first << " " << sol[edge.idx].second << endl;
+          cout << edge.idx << " " << sol[edge.idx].first << " " << sol[edge.idx].second << endl;
           edge.cost = vector<int>({sol[edge.idx].first, sol[edge.idx].second});
         }
       }
@@ -594,7 +597,7 @@ class NashDigraph {
           ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][j], 1, &all_player_strategy);
           bool is_pos_in_ne = IsStrategyNE(all_player_strategy);
           if (best_cells_cover_matrix_[i][j]) {
-            // assert(!is_pos_in_ne);
+            assert(!is_pos_in_ne);
           }
           num_of_ne += is_pos_in_ne;
         }
@@ -668,7 +671,7 @@ class NashDigraph {
       }
       LinearFunc res;
       if (is_vertex_used[curv]) { // got cycle
-        bool is_already_in_cycle = false;
+        bool is_already_in_cycle = (start_vertex_ == curv);
         for (const auto& edge_coords : edges_path) {
           const auto& edge = edges_[edge_coords.first][edge_coords.second];
           if (!is_already_in_cycle) {
@@ -699,9 +702,11 @@ class NashDigraph {
           return false;
         }
         if (old_func.IsCycle()) {
-          lp_solver->PushInequality(old_func.GetVectorizedCycle(num_of_edges_), 1);
+          lp_solver->PushInequality(old_func.GetVectorizedCycle(num_of_edges_, -1), -1); // c > 0
         }
-        lp_solver->PushInequality(new_func.GetVectorizedCycle(num_of_edges_), -1);
+        if (new_func.IsCycle()) {
+          lp_solver->PushInequality(new_func.GetVectorizedCycle(num_of_edges_, 1), -1); // c < 0
+        }
         return true;
       }
       vector<int> ineq(num_of_edges_);
@@ -731,14 +736,14 @@ class NashDigraph {
           continue;
         }
         const LinearFunc& best_linear_func = linear_funcs_by_cell[tx][cy];
-        assert(!best_linear_func.IsCycle());
+        bool can_add_ineqs = true;
         for (int func_idx : col_jumps_[cy]) {
           if (func_idx == tx) {
             continue;
           }
-          assert(AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, lp_x));
+          can_add_ineqs &= AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, lp_x);
         }
-        if (lp_x->IsFeasible()) {
+        if (can_add_ineqs && lp_x->IsFeasible()) {
           vector<int> colored_cells;
           for (int wx = 0; wx < n; ++wx) {
             if (linear_funcs_by_cell[wx][cy] == linear_funcs_by_cell[tx][cy]) {
@@ -781,14 +786,14 @@ class NashDigraph {
           continue;
         }
         const LinearFunc& best_linear_func = linear_funcs_by_cell[cx][ty];
-        assert(!best_linear_func.IsCycle());
+        bool can_add_ineqs = true;
         for (int func_idx : row_jumps_[cx]) {
           if (func_idx == ty) {
             continue;
           }
-          assert(AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, lp_y));
+          can_add_ineqs &= AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, lp_y);
         }
-        if (lp_y->IsFeasible()) {
+        if (can_add_ineqs && lp_y->IsFeasible()) {
           vector<int> colored_cells;
           for (int wy = 0; wy < m; ++wy) {
             if (linear_funcs_by_cell[cx][wy] == linear_funcs_by_cell[cx][ty]) {
@@ -1265,8 +1270,8 @@ bool CheckIfTreeValidForTest(const vector<vector<int>>& edges, const vector<int>
 }
 
 void CheckTreeTests() {
-  int kMaxTreeSize = 10;
-  int kMinTreeSize = 7;
+  int kMaxTreeSize = 15;
+  int kMinTreeSize = 10;
   int kNumOfIters = 100;
   for (int it = 0; it < kNumOfIters; ++it) {
     int tree_size = GetRandomInt(kMinTreeSize, kMaxTreeSize);
@@ -1340,21 +1345,18 @@ void CheckTreeTests() {
   }
 }
 
-int main() {
-  LPSolver::LaunchPython();
-  //freopen("input.txt", "r", stdin);
-  //NashDigraph G("input.txt", false);
-  //cout << G.SolveThreePlayersCosts() << endl;
-  //G.CheckCorrectnessThree();
-
-  // cout << G.AreAllVerticesAccessibleFromStart() << endl;
-  // cout << G.SolveTwoPlayersCosts(true) << endl;
-  // G.CheckCorrectness();
-  //cout << G.GetIneqSatPercentage() << endl;
-  //cout << G.CountNumOfNE() << endl;
-  CheckTreeTests();
-  /*
-  TryToSolve(
+void CheckNegativeCostsTests() {
+  vector<int> turns = {0, 1, 1, -1};
+  NashDigraph G(turns, 2, 0);
+  G.AddEmptyEdge(0, 1, 0);
+  G.AddEmptyEdge(1, 2, 1);
+  G.AddEmptyEdge(2, 0, 2);
+  G.AddEmptyEdge(0, 2, 3);
+  G.AddEmptyEdge(1, 0, 4);
+  G.AddEmptyEdge(2, 1, 5);
+  G.AddEmptyEdge(2, 3, 6);
+  G.Print(false);
+  auto solver_params = 
     SolverParameters{
       .are_pay_costs_positive = false,
       .is_special_six_cycle_len_graph = false, 
@@ -1363,10 +1365,43 @@ int main() {
       .cycle_size = 6,
       .num_of_edges_to_cycle_bounds = {{0, 2}, {0, 2}, {0, 2}},
       .offset_filename = "offset.txt",
+      .should_shuffle_graphs = true,
+      .need_to_remove_one_strategy = false
+    };
+  G.Preprocess(solver_params);
+  G.CalcImprovementsTable(solver_params);
+  assert(G.SolveTwoPlayersCosts(solver_params));
+  G.CheckCorrectness();
+}
+
+int main() {
+  LPSolver::LaunchPython();
+  //freopen("input.txt", "r", stdin);
+  // NashDigraph G("input.txt", true);
+  // cout << G.CountNumOfNE() << endl;
+  //cout << G.SolveThreePlayersCosts() << endl;
+  //G.CheckCorrectnessThree();
+
+  // cout << G.AreAllVerticesAccessibleFromStart() << endl;
+  // cout << G.SolveTwoPlayersCosts(true) << endl;
+  // G.CheckCorrectness();
+  //cout << G.GetIneqSatPercentage() << endl;
+  //cout << G.CountNumOfNE() << endl;
+  // CheckTreeTests();
+  // CheckNegativeCostsTests();
+  
+  TryToSolve(
+    SolverParameters{
+      .are_pay_costs_positive = false,
+      .is_special_six_cycle_len_graph = false, 
+      .left_path_len_bound = 2,
+      .right_path_len_bound = 4,
+      .cycle_size = 6,
+      .num_of_edges_to_cycle_bounds = {{0, 3}, {0, 3}, {0, 3}},
+      .offset_filename = "offset.txt",
       .should_shuffle_graphs = true
     }
   );
-  */
   //cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732 // 0.991 930
   // 2250 - for cycle_size = 3
   // 320 for {3, 3, 3} and cycle_size = 6
