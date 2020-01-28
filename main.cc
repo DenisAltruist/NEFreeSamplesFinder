@@ -7,7 +7,7 @@ using namespace std;
 
 const int kEdgeCostLimit = 25;
 
-mt19937 mt(123);
+mt19937 mt(12345);
 
 int PlusInf() {
   return numeric_limits<int>::max();
@@ -1389,19 +1389,20 @@ int main() {
   //cout << G.CountNumOfNE() << endl;
   // CheckTreeTests();
   // CheckNegativeCostsTests();
-  
+
   TryToSolve(
     SolverParameters{
-      .are_pay_costs_positive = false,
-      .is_special_six_cycle_len_graph = false, 
+      .are_pay_costs_positive = true,
+      .is_special_six_cycle_len_graph = true, 
       .left_path_len_bound = 2,
-      .right_path_len_bound = 4,
+      .right_path_len_bound = 3,
       .cycle_size = 6,
-      .num_of_edges_to_cycle_bounds = {{0, 3}, {0, 3}, {0, 3}},
+      .num_of_edges_to_cycle_bounds = {{0, 2}, {0, 2}, {0, 2}},
       .offset_filename = "offset.txt",
       .should_shuffle_graphs = true
     }
   );
+
   //cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732 // 0.991 930
   // 2250 - for cycle_size = 3
   // 320 for {3, 3, 3} and cycle_size = 6
