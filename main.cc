@@ -1166,44 +1166,36 @@ bool AreSpecialNashDigraphIsomorphic(const NashDigraph& n1, const NashDigraph& n
   vector<int> turns_n1 = n1.GetTurns();
   vector<int> turns_n2 = n2.GetTurns();
   int n = adj_m1.size();
-  for (size_t cycle_offset = 0; cycle_offset < cycle_size; ++cycle_offset) {
-    vector<size_t> path_perm(path_size);
-    iota(path_perm.begin(), path_perm.end(), cycle_size + 1);
-    vector<size_t> big_perm(n);
-    int cur_label = cycle_offset;
-    // 0 -> 0 as terminal vertex
-    for (int curv = 1; curv <= cycle_size; ++curv) {
-      big_perm[curv] = cur_label + 1;
-      cur_label = (cur_label + 1) % cycle_size;
+  vector<size_t> path_perm(path_size);
+  iota(path_perm.begin(), path_perm.end(), cycle_size + 1);
+  vector<size_t> big_perm(n);
+  do {
+    for (int curv = cycle_size + 1; curv <= cycle_size + path_size; ++curv) {
+      big_perm[curv] = path_perm[curv - cycle_size - 1];
     }
-    do {
-      for (int curv = cycle_size + 1; curv <= cycle_size + path_size; ++curv) {
-        big_perm[curv] = path_perm[curv - cycle_size - 1];
-      }
-      bool is_cert_found = true;
-      for (int curv = 0; curv < n; ++curv) {
-        is_cert_found &= (turns_n1[curv] == turns_n2[big_perm[curv]]);
-      }
-      for (int v = 0; v < n; ++v) {
-        for (int u = v + 1; u < n; ++u) {
-          if (adj_m1[v][u]) {
-            is_cert_found &= adj_m2[big_perm[v]][big_perm[u]];
-          } else {
-            is_cert_found &= !adj_m2[big_perm[v]][big_perm[u]];
-          }
-          if (!is_cert_found) {
-            break;
-          }
+    bool is_cert_found = true;
+    for (int curv = 0; curv < n; ++curv) {
+      is_cert_found &= (turns_n1[curv] == turns_n2[big_perm[curv]]);
+    }
+    for (int v = 0; v < n; ++v) {
+      for (int u = 0; u < n; ++u) {
+        if (adj_m1[v][u]) {
+          is_cert_found &= adj_m2[big_perm[v]][big_perm[u]];
+        } else {
+          is_cert_found &= !adj_m2[big_perm[v]][big_perm[u]];
         }
         if (!is_cert_found) {
           break;
         }
       }
-      if (is_cert_found) {
-        return true;
+      if (!is_cert_found) {
+        break;
       }
-    } while (next_permutation(path_perm.begin(), path_perm.end()));
-  }
+    }
+    if (is_cert_found) {
+      return true;
+    }
+  } while (next_permutation(path_perm.begin(), path_perm.end()));
   return false;
 }
 
@@ -1235,6 +1227,10 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
     for (int next_vertex_num = vertex_in_path + 1; next_vertex_num < path_size; ++next_vertex_num) {
       int bit_pos = path_size - next_vertex_num - 1;
       int is_connected = (nghbr_mask >> bit_pos) & 1;
+      // Add condition for the starting vertex: (there are edges from starting vertex to others in C_6 + P)
+      if (vertex_in_path == 0 && nghbr_mask != (1 << (path_size - 1)) - 1) {
+        return false;
+      }
       if (is_connected) {
         int nxt_clr = (turns[cycle_size + 1 + vertex_in_path] ^ 1);
         int cur_clr = turns[cycle_size + 1 + next_vertex_num];
@@ -1311,6 +1307,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
 
   map<vector<int>, vector<NashDigraph>> buckets;
   int total_num_of_classes = 0;
+  int total_num_of_graphs = 0;
 
   for (int path_size = solver_params.left_path_len_bound; path_size <= solver_params.right_path_len_bound;
        ++path_size) {
@@ -1338,19 +1335,21 @@ bool TryToSolve(const SolverParameters& solver_params) {
         if (!should_use) {
           continue;
         }
+        total_num_of_graphs++;
         vector<NashDigraph>& cur_bucket = buckets[G.GetPassport()];
         bool is_same_class_found = false;
         for (const NashDigraph& lhs_dg : cur_bucket) {
+          /*
           if (AreSpecialNashDigraphIsomorphic(lhs_dg, G, cur_graph_id)) {
             is_same_class_found = true;
             break;
           }
+          */
         }
         if (!is_same_class_found) {
           total_num_of_classes++;
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
-
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
             return true;
@@ -1360,6 +1359,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
       }
     }
   }
+  cerr << "Total num of graphs: " << total_num_of_graphs << endl;
   return false;
 }
 
@@ -1554,9 +1554,9 @@ int main() {
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = true,
                                          .left_path_len_bound = 2,
-                                         .right_path_len_bound = 4,
+                                         .right_path_len_bound = 2,
                                          .cycle_size = 6,
-                                         .num_of_edges_to_cycle_bounds = {{0, 3}, {0, 3}, {0, 3}, {0, 3}},
+                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 6}, {6, 6}, {6, 6}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
