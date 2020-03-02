@@ -1339,22 +1339,22 @@ bool TryToSolve(const SolverParameters& solver_params) {
         vector<NashDigraph>& cur_bucket = buckets[G.GetPassport()];
         bool is_same_class_found = false;
         for (const NashDigraph& lhs_dg : cur_bucket) {
-          /*
           if (AreSpecialNashDigraphIsomorphic(lhs_dg, G, cur_graph_id)) {
             is_same_class_found = true;
             break;
           }
-          */
         }
         if (!is_same_class_found) {
           total_num_of_classes++;
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
+          /*
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
             return true;
           }
           cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
+          */
         }
       }
     }
@@ -1553,10 +1553,10 @@ int main() {
 
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = true,
-                                         .left_path_len_bound = 2,
-                                         .right_path_len_bound = 2,
+                                         .left_path_len_bound = 3,
+                                         .right_path_len_bound = 3,
                                          .cycle_size = 6,
-                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 6}, {6, 6}, {6, 6}},
+                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 6}, {1, 6}, {6, 6}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
