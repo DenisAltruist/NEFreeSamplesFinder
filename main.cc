@@ -1218,7 +1218,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   for (int vertex_idx = cycle_size + 1; vertex_idx < n; ++vertex_idx) {
     turns[vertex_idx] = -1;
   }
-  turns[cycle_size + 1] = 0;
+  turns[cycle_size + 1] = 1;
   vector<pair<int, int>> edges;
   // Edges on path
   bool is_bipartite = true;
@@ -1551,8 +1551,8 @@ int main() {
 
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = true,
-                                         .left_path_len_bound = 3,
-                                         .right_path_len_bound = 3,
+                                         .left_path_len_bound = 2,
+                                         .right_path_len_bound = 2,
                                          .cycle_size = 6,
                                          .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 6}, {1, 6}, {6, 6}},
                                          .offset_filename = "offset.txt",
