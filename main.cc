@@ -1346,13 +1346,15 @@ bool TryToSolve(const SolverParameters& solver_params) {
         }
         if (!is_same_class_found) {
           total_num_of_classes++;
-          cout << "Graph id to check: " << total_num_of_classes << endl;
-          cur_bucket.emplace_back(G);
-          bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
-          if (res) {
-            return true;
+          if (total_num_of_classes == 63) {
+            cout << "Graph id to check: " << total_num_of_classes << endl;
+            cur_bucket.emplace_back(G);
+            bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
+            if (res) {
+              return true;
+            }
+            cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
           }
-          cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
         }
       }
     }
