@@ -1249,11 +1249,18 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
     return false;
   }
   // Edges from path to cycle
+  vector<int> set_of_cycle_outs(cycle_size, 0);
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int cycle_mask = choice_to_connect_with_cycle[vertex_in_path];
     for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
       int is_connected = (cycle_mask >> vertex_in_cycle) & 1;
       if (is_connected) {
+        if (set_of_cycle_outs[vertex_in_cycle]) {  // multiple outs from first or second path vertex to one cycle vertex
+          return false;
+        }
+        if (vertex_in_path != 0) {
+          set_of_cycle_outs[vertex_in_cycle] = 1;
+        }
         AddEdge(cycle_size + 1 + vertex_in_path, vertex_in_cycle + 1, &edges);
       }
     }
@@ -1346,15 +1353,14 @@ bool TryToSolve(const SolverParameters& solver_params) {
         }
         if (!is_same_class_found) {
           total_num_of_classes++;
-          if (total_num_of_classes == 63) {
-            cout << "Graph id to check: " << total_num_of_classes << endl;
-            cur_bucket.emplace_back(G);
-            bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
-            if (res) {
-              return true;
-            }
-            cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
+
+          cout << "Graph id to check: " << total_num_of_classes << endl;
+          cur_bucket.emplace_back(G);
+          bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
+          if (res) {
+            return true;
           }
+          cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
         }
       }
     }
@@ -1553,10 +1559,10 @@ int main() {
 
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = true,
-                                         .left_path_len_bound = 2,
-                                         .right_path_len_bound = 2,
+                                         .left_path_len_bound = 3,
+                                         .right_path_len_bound = 3,
                                          .cycle_size = 6,
-                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 6}, {1, 6}, {6, 6}},
+                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 2}, {1, 2}, {6, 6}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
