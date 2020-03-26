@@ -62,6 +62,7 @@ void PrintCosts(const vector<int>& costs) {
 }
 
 struct Edge {
+  int start;
   int finish;
   vector<int> cost;
   int idx;
@@ -178,6 +179,13 @@ class LPSolver {
     return true;
   }
 
+  void Merge(const LPSolver& rhs) {
+    for (size_t ineq_idx = 0; ineq_idx < rhs.ineqs_.size(); ++ineq_idx) {
+      ineqs_.emplace_back(rhs.ineqs_[ineq_idx]);
+      bounds_.emplace_back(rhs.bounds_[ineq_idx]);
+    }
+  }
+
   void PopInequality() {
     assert(!ineqs_.empty());
     ineqs_.pop_back();
@@ -291,6 +299,126 @@ struct SolverParameters {
   std::string offset_filename;       // name of file, where last checked cycle id would be stored
   bool should_shuffle_graphs;        // would shuffle order of graphs to check, if true
   bool need_to_remove_one_strategy;  // for test purposes
+};
+
+struct Path {
+  vector<int> vertices;
+};
+
+struct HalfCycle {
+  Path lhs_path, rhs_path;
+};
+
+struct PathCollector {
+  vector<vector<vector<Path>>> pathways_by_start_and_finish;
+  int n;
+
+  PathCollector(int n_val) : n(n_val) {
+    pathways_by_start_and_finish = vector<vector<vector<Path>>>(n, vector<vector<Path>>(n));
+  }
+
+  pair<vector<HalfCycle>, vector<HalfCycle>> GetAllHalfCycles(const vector<int>& turns) const {
+    vector<HalfCycle> res0, res1;
+    for (int v = 0; v < n; ++v) {
+      for (int u = 0; u < n; ++u) {
+        if (v == u) {
+          continue;
+        }
+        auto tmp_res = GetHalfCycles(v, u);
+        for (const auto& P : tmp_res) {
+          HalfCycle to_push{.lhs_path = pathways_by_start_and_finish[v][u][P.first],
+                            .rhs_path = pathways_by_start_and_finish[v][u][P.second]};
+          if (turns[v] == 0) {
+            res0.emplace_back(to_push);
+          } else if (turns[v] == 1) {
+            res1.emplace_back(to_push);
+          }
+        }
+      }
+    }
+    return make_pair(res0, res1);
+  }
+
+  vector<pair<int, int>> GetHalfCycles(int start, int finish) const {
+    const vector<Path>& pathes = pathways_by_start_and_finish[start][finish];
+    vector<pair<int, int>> res;
+    for (size_t i = 0; i < pathes.size(); ++i) {
+      for (size_t j = 0; j < pathes.size(); ++j) {
+        if (i == j) {
+          continue;
+        }
+        vector<bool> is_used(n);
+        bool are_intersected = false;
+        for (int v : pathes[i].vertices) {
+          if (v == start || v == finish) {
+            continue;
+          }
+          are_intersected |= is_used[v];
+          is_used[v] = true;
+        }
+        for (int v : pathes[i].vertices) {
+          if (v == start || v == finish) {
+            continue;
+          }
+          are_intersected |= is_used[v];
+          is_used[v] = true;
+        }
+        if (are_intersected) {
+          continue;
+        }
+        res.emplace_back(make_pair(i, j));
+      }
+    }
+    return res;
+  }
+
+  void CalcAllPathways(const vector<vector<int>>& M) {
+    assert(n != 0);
+    assert(M.size() == n);
+    assert(M[0].size() == n);
+    for (int start = 0; start < n; ++start) {
+      for (int finish = 0; finish < n; ++finish) {
+        if (start == finish) {
+          continue;
+        }
+        for (int mask = 0; mask < (1 << n); ++mask) {
+          int sbit = (mask >> start) & 1;
+          int fbit = (mask >> finish) & 1;
+          if (sbit || fbit) {
+            continue;
+          }
+          vector<int> perm;
+          for (int pos = n - 1; pos >= 0; --pos) {
+            int bit = (mask >> pos) & 1;
+            if (bit) {
+              perm.emplace_back(pos);
+            }
+          }
+          sort(perm.begin(), perm.end());
+          do {
+            vector<int> new_path_seq;
+            int prev = start;
+            bool is_correct_path = true;
+            new_path_seq.emplace_back(start);
+            for (int x : perm) {
+              new_path_seq.emplace_back(x);
+              if (!M[prev][x]) {
+                is_correct_path = false;
+                break;
+              }
+              prev = x;
+            }
+            is_correct_path &= M[prev][finish];
+            if (is_correct_path) {
+              new_path_seq.emplace_back(finish);
+              Path new_path{.vertices = new_path_seq};
+              pathways_by_start_and_finish[start][finish].emplace_back(new_path);
+            }
+          } while (next_permutation(perm.begin(), perm.end()));
+        }
+      }
+    }
+  }
 };
 
 class NashDigraph {
@@ -458,15 +586,7 @@ class NashDigraph {
     vector<vector<int>> can_improve_row(n, vector<int>(m, 0));
     vector<vector<int>> can_improve_col(n, vector<int>(m, 0));
     num_of_fails_by_cell_ = vector<vector<int>>(n, vector<int>(m, 0));
-    vector<vector<LinearFunc>> linear_funcs_by_cell(n, vector<LinearFunc>(m));
-    for (int cx = 0; cx < n; ++cx) {
-      for (int cy = 0; cy < m; ++cy) {
-        vector<size_t> all_players_strategy(turns_.size());
-        ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
-        ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
-        linear_funcs_by_cell[cx][cy] = GetLinFuncForPlayersByGlobalStrategy(all_players_strategy);
-      }
-    }
+    vector<vector<LinearFunc>> linear_funcs_by_cell = GetLinearFuncsByCell();
 
     LPSolver base_lp_first_player = ConfigureBaseLP(0, solver_params);
     LPSolver base_lp_second_player = ConfigureBaseLP(1, solver_params);
@@ -532,7 +652,7 @@ class NashDigraph {
   }
 
   void AddEdge(int v, int u, const vector<int>& costs, int edge_idx) {
-    edges_[v].push_back(Edge{u, costs, edge_idx});
+    edges_[v].push_back(Edge{v, u, costs, edge_idx});
     num_of_edges_++;
   }
 
@@ -961,6 +1081,21 @@ class NashDigraph {
     }
   }
 
+  vector<vector<LinearFunc>> GetLinearFuncsByCell() {
+    int n = all_possible_players_strategies_[0].size();
+    int m = all_possible_players_strategies_[1].size();
+    vector<vector<LinearFunc>> res(n, vector<LinearFunc>(m));
+    for (int cx = 0; cx < n; ++cx) {
+      for (int cy = 0; cy < m; ++cy) {
+        vector<size_t> all_players_strategy(turns_.size());
+        ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
+        ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
+        res[cx][cy] = GetLinFuncForPlayersByGlobalStrategy(all_players_strategy);
+      }
+    }
+    return res;
+  }
+
   bool SolveTwoPlayersCosts(const SolverParameters& solver_params) {
     assert(num_of_players_ == 2);
     int n = all_possible_players_strategies_[0].size();
@@ -970,19 +1105,8 @@ class NashDigraph {
     if (n == 0 || m == 0) {
       return false;
     }
+    vector<vector<LinearFunc>> linear_funcs_by_cell = GetLinearFuncsByCell();
     vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
-    vector<vector<LinearFunc>> linear_funcs_by_cell(
-        n,
-        vector<LinearFunc>(m)  // if vector is empty, then both vectors should be empty and this is a cycle
-    );
-    for (int cx = 0; cx < n; ++cx) {
-      for (int cy = 0; cy < m; ++cy) {
-        vector<size_t> all_players_strategy(turns_.size());
-        ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
-        ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
-        linear_funcs_by_cell[cx][cy] = GetLinFuncForPlayersByGlobalStrategy(all_players_strategy);
-      }
-    }
     LPSolver lp_x = ConfigureBaseLP(0, solver_params);
     LPSolver lp_y = ConfigureBaseLP(1, solver_params);
     return SolveTwoPlayersCostsRec(
@@ -1227,8 +1351,10 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
     for (int next_vertex_num = vertex_in_path + 1; next_vertex_num < path_size; ++next_vertex_num) {
       int bit_pos = path_size - next_vertex_num - 1;
       int is_connected = (nghbr_mask >> bit_pos) & 1;
-      // Add condition for the starting vertex: (there are edges from starting vertex to others in C_6 + P)
-      if (vertex_in_path == 0 && nghbr_mask != (1 << (path_size - 1)) - 1) {
+      if (vertex_in_path == 0 && next_vertex_num == 1 && !is_connected) {
+        return false;
+      }
+      if (vertex_in_path == 1 && next_vertex_num == 2 && !is_connected) {
         return false;
       }
       if (is_connected) {
@@ -1353,9 +1479,24 @@ bool TryToSolve(const SolverParameters& solver_params) {
         }
         if (!is_same_class_found) {
           total_num_of_classes++;
-
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
+          G.Print(false);
+
+          /*
+          // G.Print(false);
+
+          PathCollector path_collector(G.GetTurns().size());
+          path_collector.CalcAllPathways(G.GetAdjacentMatrix());
+          // cout << path_collector.pathways_by_start_and_finish[7][0].size() << endl;
+
+          auto half_cycles = path_collector.GetAllHalfCycles(G.GetTurns());
+          cout << half_cycles.first.size() << " " << half_cycles.second.size() << endl;
+          G.Preprocess(solver_params);
+          G.CalcImprovementsTable(solver_params);
+          G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
+          */
+
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
             return true;
@@ -1562,7 +1703,7 @@ int main() {
                                          .left_path_len_bound = 3,
                                          .right_path_len_bound = 3,
                                          .cycle_size = 6,
-                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 2}, {1, 2}, {6, 6}},
+                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 2}, {1, 2}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
