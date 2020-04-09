@@ -1342,7 +1342,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   for (int vertex_idx = cycle_size + 1; vertex_idx < n; ++vertex_idx) {
     turns[vertex_idx] = -1;
   }
-  turns[cycle_size + 1] = 1;
+  turns[cycle_size + 1] = 0;  // player num
   vector<pair<int, int>> edges;
   // Edges on path
   bool is_bipartite = true;
@@ -1496,7 +1496,6 @@ bool TryToSolve(const SolverParameters& solver_params) {
           G.CalcImprovementsTable(solver_params);
           G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
           */
-
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
             return true;
