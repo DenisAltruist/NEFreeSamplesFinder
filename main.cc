@@ -1684,7 +1684,16 @@ void TestIsomoprhicChecker() {
 int main() {
   LPSolver::LaunchPython();
   // freopen("input.txt", "r", stdin);
-  // NashDigraph G("input.txt", true);
+  NashDigraph G("input.txt", false);
+  auto solver_params = SolverParameters{
+      .are_pay_costs_positive = true,
+      .is_special_six_cycle_len_graph = true,
+  };
+  G.Preprocess(solver_params);
+  G.CalcImprovementsTable(solver_params);
+  cout << G.SolveTwoPlayersCosts(solver_params);
+  G.CheckCorrectness();
+
   // cout << G.CountNumOfNE() << endl;
   // cout << G.SolveThreePlayersCosts() << endl;
   // G.CheckCorrectnessThree();
@@ -1697,6 +1706,8 @@ int main() {
   // CheckTreeTests();
   // CheckNegativeCostsTests();
 
+  /*
+
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = true,
                                          .left_path_len_bound = 3,
@@ -1708,6 +1719,8 @@ int main() {
   if (res) {
     cout << "VICTORY!" << endl;
   }
+
+  */
 
   // TestIsomoprhicChecker();
 
