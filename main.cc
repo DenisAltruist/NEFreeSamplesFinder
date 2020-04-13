@@ -1687,11 +1687,11 @@ int main() {
   NashDigraph G("input.txt", false);
   auto solver_params = SolverParameters{
       .are_pay_costs_positive = true,
-      .is_special_six_cycle_len_graph = true,
+      .is_special_six_cycle_len_graph = false,
   };
   G.Preprocess(solver_params);
   G.CalcImprovementsTable(solver_params);
-  cout << G.SolveTwoPlayersCosts(solver_params);
+  cout << G.SolveTwoPlayersCosts(solver_params) << endl;
   G.CheckCorrectness();
 
   // cout << G.CountNumOfNE() << endl;
