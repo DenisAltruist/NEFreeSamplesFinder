@@ -1381,16 +1381,29 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
     for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
       int is_connected = (cycle_mask >> vertex_in_cycle) & 1;
       if (is_connected) {
-        if (set_of_cycle_outs[vertex_in_cycle]) {  // multiple outs from first or second path vertex to one cycle vertex
-          return false;
-        }
         if (vertex_in_path != 0) {
-          set_of_cycle_outs[vertex_in_cycle] = 1;
+          set_of_cycle_outs[vertex_in_cycle]++;
         }
         AddEdge(cycle_size + 1 + vertex_in_path, vertex_in_cycle + 1, &edges);
       }
     }
   }
+  int num_of_intersections_on_cycle_outs = 0;
+  for (int cycle_vertex = 0; cycle_vertex < cycle_size; ++cycle_vertex) {
+    assert(set_of_cycle_outs[cycle_vertex] <= 2);
+    if (set_of_cycle_outs[cycle_vertex] == 2) {
+      num_of_intersections_on_cycle_outs++;
+    }
+  }
+  if (num_of_intersections_on_cycle_outs > 1) {
+    return false;
+  }
+  if (num_of_intersections_on_cycle_outs == 0 && __builtin_popcount(choice_to_connect_with_cycle[0]) <= 2 &&
+      __builtin_popcount(choice_to_connect_with_cycle[1] <= 2)) {
+    cout << "Got already considered graph. Continue ...";
+    return false;
+  }
+
   // Edges on cycle
 
   for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
@@ -1481,8 +1494,6 @@ bool TryToSolve(const SolverParameters& solver_params) {
           total_num_of_classes++;
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
-          G.Print(false);
-
           /*
           // G.Print(false);
 
@@ -1702,7 +1713,7 @@ int main() {
                                          .left_path_len_bound = 3,
                                          .right_path_len_bound = 3,
                                          .cycle_size = 6,
-                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 2}, {1, 2}},
+                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 3}, {1, 3}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
