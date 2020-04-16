@@ -546,7 +546,7 @@ class NashDigraph {
             vector<int> ineq(num_of_edges_);
             size_t var_idx = edge.idx;
             ineq[var_idx] = 1;
-            res.PushInequality(ineq, 1);
+            // res.PushInequality(ineq, 1);
           } else {
             terminal_edge_idx_by_v[v] = edge.idx;
           }
@@ -739,8 +739,7 @@ class NashDigraph {
         num_of_ne += is_pos_in_ne;
       }
     }
-    int num_of_saturated_cells = ineq_sat_percentage_ * n * m;
-    cout << "Saturation info: " << n * m - num_of_ne << " " << num_of_saturated_cells << endl;
+    cout << "Saturation info: " << n * m << " " << n * m - num_of_ne << endl;
     is_complete_ = false;
   }
 
@@ -1381,29 +1380,16 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
     for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
       int is_connected = (cycle_mask >> vertex_in_cycle) & 1;
       if (is_connected) {
+        if (set_of_cycle_outs[vertex_in_cycle]) {  // multiple outs from first or second path vertex to one cycle vertex
+          return false;
+        }
         if (vertex_in_path != 0) {
-          set_of_cycle_outs[vertex_in_cycle]++;
+          set_of_cycle_outs[vertex_in_cycle] = 1;
         }
         AddEdge(cycle_size + 1 + vertex_in_path, vertex_in_cycle + 1, &edges);
       }
     }
   }
-  int num_of_intersections_on_cycle_outs = 0;
-  for (int cycle_vertex = 0; cycle_vertex < cycle_size; ++cycle_vertex) {
-    assert(set_of_cycle_outs[cycle_vertex] <= 2);
-    if (set_of_cycle_outs[cycle_vertex] == 2) {
-      num_of_intersections_on_cycle_outs++;
-    }
-  }
-  if (num_of_intersections_on_cycle_outs > 1) {
-    return false;
-  }
-  if (num_of_intersections_on_cycle_outs == 0 && __builtin_popcount(choice_to_connect_with_cycle[0]) <= 2 &&
-      __builtin_popcount(choice_to_connect_with_cycle[1] <= 2)) {
-    cout << "Got already considered graph. Continue ...";
-    return false;
-  }
-
   // Edges on cycle
 
   for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
@@ -1492,15 +1478,18 @@ bool TryToSolve(const SolverParameters& solver_params) {
         }
         if (!is_same_class_found) {
           total_num_of_classes++;
+          if (total_num_of_classes != 223) {
+            continue;
+          }
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
-          /*
           // G.Print(false);
 
+          /*
+          // G.Print(false);
           PathCollector path_collector(G.GetTurns().size());
           path_collector.CalcAllPathways(G.GetAdjacentMatrix());
           // cout << path_collector.pathways_by_start_and_finish[7][0].size() << endl;
-
           auto half_cycles = path_collector.GetAllHalfCycles(G.GetTurns());
           cout << half_cycles.first.size() << " " << half_cycles.second.size() << endl;
           G.Preprocess(solver_params);
@@ -1713,7 +1702,7 @@ int main() {
                                          .left_path_len_bound = 3,
                                          .right_path_len_bound = 3,
                                          .cycle_size = 6,
-                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 3}, {1, 3}},
+                                         .num_of_edges_to_cycle_bounds = {{6, 6}, {1, 2}, {1, 2}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
