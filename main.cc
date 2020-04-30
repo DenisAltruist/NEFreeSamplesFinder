@@ -1494,6 +1494,9 @@ bool TryToSolve(const SolverParameters& solver_params) {
           total_num_of_classes++;
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
+          if (total_num_of_classes < 277) {
+            continue;
+          }
           /*
           // G.Print(false);
 
