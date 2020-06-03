@@ -7,7 +7,7 @@ using namespace std;
 
 const int kEdgeCostLimit = 25;
 
-mt19937 mt(12345);
+mt19937 mt(1234);
 
 int PlusInf() {
   return numeric_limits<int>::max();
@@ -151,7 +151,9 @@ class LPSolver {
   vector<int> GetIntSolution() {
     vector<int> res(num_of_variables_);
     auto sol_pair = GetSolution();
+
     vector<double> reg_sol = sol_pair.second;
+
     assert(sol_pair.first == true);
     for (int mask = 0; mask < (1 << num_of_variables_); mask++) {
       vector<double> trial(num_of_variables_);
@@ -766,8 +768,6 @@ class NashDigraph {
 
   int CountNumOfNE() {
     auto lin_funcs = GetLinearFuncsByCell();
-    cerr << lin_funcs.size() << " " << lin_funcs[0].size() << endl;
-
     size_t n = turns_.size();
     vector<int> num_of_strategies_limits(num_of_players_);
     for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
@@ -996,7 +996,7 @@ class NashDigraph {
     int m = (*is_cell_used)[0].size();
     assert(cx < n);
     assert(cy < m);
-    /*
+
     size_t num_of_used_cells = 0;
     for (size_t wx = 0; wx < n; ++wx) {
       for (size_t wy = 0; wy < m; ++wy) {
@@ -1007,15 +1007,14 @@ class NashDigraph {
     }
     double sat_percentage_ = double(num_of_used_cells) / (n * m);
     cout << "Branch percentage: " << sat_percentage_ << endl;
-    */
-    /*
-     if (sat_percentage_ > ineq_sat_percentage_) {
-       ineq_sat_percentage_ = sat_percentage_;
-       best_solver_first_player_ = *lp_x;
-       best_solver_second_player_ = *lp_y;
-       best_cells_cover_matrix_ = *is_cell_used;
-     }
-     */
+
+    if (sat_percentage_ > ineq_sat_percentage_) {
+      ineq_sat_percentage_ = sat_percentage_;
+      best_solver_first_player_ = *lp_x;
+      best_solver_second_player_ = *lp_y;
+      best_cells_cover_matrix_ = *is_cell_used;
+    }
+
     if ((*is_cell_used)[cx][cy]) {
       int wx, wy, max_num_of_fails = -1;
       for (int tx = 0; tx < n; ++tx) {
@@ -1129,10 +1128,22 @@ class NashDigraph {
     }
     vector<vector<LinearFunc>> linear_funcs_by_cell = GetLinearFuncsByCell();
     vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
+    int sx = -1, sy = -1;
+    for (int i = 0; i < n; ++i) {
+      for (int j = 0; j < m; ++j) {
+        if (linear_funcs_by_cell[i][j].IsCycle()) {
+          is_pair_of_strategies_used[i][j] = true;
+        } else {
+          sx = i;
+          sy = j;
+        }
+      }
+    }
+
     LPSolver lp_x = ConfigureBaseLP(0, solver_params);
     LPSolver lp_y = ConfigureBaseLP(1, solver_params);
     return SolveTwoPlayersCostsRec(
-        linear_funcs_by_cell, solver_params, 0, 0, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
+        linear_funcs_by_cell, solver_params, sx, sy, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
   }
 
   void Dfs(int cur_vertex, vector<int>* is_vertex_visited) {
@@ -1214,9 +1225,6 @@ class NashDigraph {
     int n = all_possible_players_strategies_[0].size();
     int m = all_possible_players_strategies_[1].size();
     vector<vector<LinearFunc>> funcs = GetLinearFuncsByCell();
-    cerr << n << " " << m << endl;
-    cerr << turns_.size() << endl;
-    cerr << start_vertex_ << endl;
 
     vector<vector<int>> costs_by_edge_idx(num_of_edges_);
 
@@ -1286,8 +1294,27 @@ class NashDigraph {
         }
       }
     }
-    cerr << "MH HM sizes: " << MH.size() << " " << HM.size() << endl;
-    LPSolver lp;
+    bool is_mh_strat_found = false;
+    for (int j = 0; j < m; ++j) {
+      bool is_ok = true;
+      for (int i = 0; i < n; ++i) {
+        vector<int> edges_set = funcs[i][j].GetFullEdgesSet();
+        auto it = MH.find(edges_set);
+        if (it == MH.end()) {
+          is_ok = false;
+          break;
+        }
+      }
+      if (is_ok) {
+        is_mh_strat_found = true;
+        break;
+      }
+    }
+    if (!is_mh_strat_found) {
+      cerr << "BAD MH!" << endl;
+      exit(0);
+    }
+    LPSolver lp(num_of_edges_);
     for (auto it = MH.begin(); it != MH.end(); ++it) {
       const vector<int>& lhs = *it;
       for (auto jt = HM.begin(); jt != HM.end(); ++jt) {
@@ -1306,7 +1333,9 @@ class NashDigraph {
       cout << "EMPTY! Continue ..." << endl;
       return;
     }
-    if (!lp.IsFeasible()) {
+    bool is_feasible = lp.IsFeasible();
+
+    if (!is_feasible) {
       cout << "BAD!" << endl;
       lp.PrintIneqs();
       Print(true);
@@ -2074,21 +2103,23 @@ void CheckHypoNewGraphs(int n, int add_m) {
 int main() {
   LPSolver::LaunchPython();
   NashDigraph G("input.txt", false);
-  G.Preprocess(SolverParameters{.are_pay_costs_positive = true});
+
+    G.Preprocess(SolverParameters{.are_pay_costs_positive = true});
   G.CalcImprovementsTable(SolverParameters{.are_pay_costs_positive = true});
   cout << G.SolveTwoPlayersCosts(SolverParameters{.are_pay_costs_positive = true}) << endl;
-
-  // G.CheckCorrectness();
-  // G.Print(true);
+  /*
+  G.CheckCorrectness();
+  G.Print(true);
+  */
 
   // G.CheckHypoNew();
   // CheckHypoNewGraphs(8, 8);
   // NashDigraph G("input.txt", true);
   // G.CheckHypoNew();
-  /*
 
+  /*
   int it = 0;
-  while (it <= 1000) {
+  while (it <= 50000) {
     G.SetRandomEdgeCosts(1, 1000);
     G.CheckHypoNew();
     auto f1 = G.CheckHypo(0);
