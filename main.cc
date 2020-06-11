@@ -7,7 +7,7 @@ using namespace std;
 
 const int kEdgeCostLimit = 25;
 
-mt19937 mt(1234);
+mt19937 mt(1);
 
 int PlusInf() {
   return numeric_limits<int>::max();
@@ -786,6 +786,15 @@ class NashDigraph {
         ApplyPlayerStrategyToGlobalOne(cur_player_strategy, player_idx, &all_players_strategy);
       }
       bool is_strategy_ne = IsStrategyNE(all_players_strategy);
+      if (is_strategy_ne) {
+        for (int v = 0; v < n; ++v) {
+          if (turns_[v] == -1) {
+            continue;
+          }
+          int edge_idx = all_players_strategy[v];
+          cout << v << " " << edges_[v][edge_idx].finish << endl;
+        }
+      }
       num_of_corteges_in_ne += is_strategy_ne;
     }
     // cout << "Num of corteges in NE: " << num_of_corteges_in_ne << endl;
@@ -996,27 +1005,9 @@ class NashDigraph {
     int m = (*is_cell_used)[0].size();
     assert(cx < n);
     assert(cy < m);
-
-    size_t num_of_used_cells = 0;
-    for (size_t wx = 0; wx < n; ++wx) {
-      for (size_t wy = 0; wy < m; ++wy) {
-        if ((*is_cell_used)[wx][wy]) {
-          num_of_used_cells++;
-        }
-      }
-    }
-    double sat_percentage_ = double(num_of_used_cells) / (n * m);
-    cout << "Branch percentage: " << sat_percentage_ << endl;
-
-    if (sat_percentage_ > ineq_sat_percentage_) {
-      ineq_sat_percentage_ = sat_percentage_;
-      best_solver_first_player_ = *lp_x;
-      best_solver_second_player_ = *lp_y;
-      best_cells_cover_matrix_ = *is_cell_used;
-    }
-
     if ((*is_cell_used)[cx][cy]) {
       int wx, wy, max_num_of_fails = -1;
+      int num_of_used_cells = 0;
       for (int tx = 0; tx < n; ++tx) {
         for (int ty = 0; ty < m; ++ty) {
           if (!(*is_cell_used)[tx][ty]) {
@@ -1025,11 +1016,21 @@ class NashDigraph {
               wx = tx;
               wy = ty;
             }
+          } else {
+            num_of_used_cells++;
           }
         }
       }
       if (max_num_of_fails == -1) {
         return true;
+      }
+      double sat_percentage_ = double(num_of_used_cells) / (n * m);
+      if (sat_percentage_ > ineq_sat_percentage_) {
+        cerr << "Updated sat percentage: " << sat_percentage_ << std::endl;
+        ineq_sat_percentage_ = sat_percentage_;
+        best_solver_first_player_ = *lp_x;
+        best_solver_second_player_ = *lp_y;
+        best_cells_cover_matrix_ = *is_cell_used;
       }
       return SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, wx, wy, -1, is_cell_used, lp_x, lp_y);
     }
@@ -1126,6 +1127,7 @@ class NashDigraph {
     if (n == 0 || m == 0) {
       return false;
     }
+    cerr << n << " " << m << endl;
     vector<vector<LinearFunc>> linear_funcs_by_cell = GetLinearFuncsByCell();
     vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
     int sx = -1, sy = -1;
@@ -1664,14 +1666,6 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
     for (int next_vertex_num = vertex_in_path + 1; next_vertex_num < path_size; ++next_vertex_num) {
       int bit_pos = path_size - next_vertex_num - 1;
       int is_connected = (nghbr_mask >> bit_pos) & 1;
-      /*
-      if (vertex_in_path == 0 && next_vertex_num == 1 && !is_connected) {
-        return false;
-      }
-      if (vertex_in_path == 1 && next_vertex_num == 2 && !is_connected) {
-        return false;
-      }
-      */
       if (is_connected) {
         int nxt_clr = (turns[cycle_size + 1 + vertex_in_path] ^ 1);
         int cur_clr = turns[cycle_size + 1 + next_vertex_num];
@@ -1683,6 +1677,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
       }
     }
     if (vertex_in_path != 0) {
+      // TERMINALS
       AddEdge(cycle_size + 1 + vertex_in_path, 0, &edges);  // edge to terminal from prefix vertex except start
     }
   }
@@ -1745,24 +1740,11 @@ bool CheckNashDigraphSample(const SolverParameters& solver_params, double* max_i
   // G->Print(false);
   G->Preprocess(solver_params);
   G->CalcImprovementsTable(solver_params);
-  for (int it = 1; it <= 10000; ++it) {
-    G->SetRandomEdgeCosts(1, 100);
-    auto f1 = G->CheckHypo(0);
-    auto f2 = G->CheckHypo(1);
-    if (f1.empty() || f2.empty()) {
-      cout << "BAD!" << endl;
-      exit(0);
-    }
-    // G->CheckHypoNew();
-  }
-  ++x;
-  cout << "YES! " << x << " " << endl;
-  /*
+
   bool g_res = G->SolveTwoPlayersCosts(solver_params);
   G->CheckCorrectness();
   double cur_ineq_sat_percentage = G->GetIneqSatPercentage();
   *max_ineq_rate = max(*max_ineq_rate, cur_ineq_sat_percentage);
-  */
   return false;
 }
 
@@ -1825,14 +1807,11 @@ bool TryToSolve(const SolverParameters& solver_params) {
         }
         if (!is_same_class_found) {
           total_num_of_classes++;
-          if (total_num_of_classes < 330) {
-            continue;
-          }
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
-          /*
-          // G.Print(false);
 
+          G.Print(false);
+          /*
           PathCollector path_collector(G.GetTurns().size());
           path_collector.CalcAllPathways(G.GetAdjacentMatrix());
           // cout << path_collector.pathways_by_start_and_finish[7][0].size() << endl;
@@ -1843,6 +1822,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
           G.CalcImprovementsTable(solver_params);
           G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
           */
+
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
             return true;
@@ -2102,36 +2082,12 @@ void CheckHypoNewGraphs(int n, int add_m) {
 
 int main() {
   LPSolver::LaunchPython();
-  NashDigraph G("input.txt", false);
 
-    G.Preprocess(SolverParameters{.are_pay_costs_positive = true});
-  G.CalcImprovementsTable(SolverParameters{.are_pay_costs_positive = true});
-  cout << G.SolveTwoPlayersCosts(SolverParameters{.are_pay_costs_positive = true}) << endl;
-  /*
-  G.CheckCorrectness();
-  G.Print(true);
-  */
-
-  // G.CheckHypoNew();
-  // CheckHypoNewGraphs(8, 8);
-  // NashDigraph G("input.txt", true);
-  // G.CheckHypoNew();
+  // NashDigraph G("input.txt", false);
 
   /*
-  int it = 0;
-  while (it <= 50000) {
-    G.SetRandomEdgeCosts(1, 1000);
-    G.CheckHypoNew();
-    auto f1 = G.CheckHypo(0);
-    auto f2 = G.CheckHypo(1);
-    if (f1.empty() || f2.empty()) {
-      cout << "BAD!" << endl;
-      exit(0);
-    }
-    ++it;
-  }
+  cerr << G.CountNumOfNE() << endl;
   */
-
   /*
   auto f1 = G.CheckHypo(0);
   auto f2 = G.CheckHypo(1);
@@ -2175,19 +2131,17 @@ int main() {
   // CheckTreeTests();
   // CheckNegativeCostsTests();
 
-  /*
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
-                                         .is_special_six_cycle_len_graph = true,
-                                         .left_path_len_bound = 3,
+                                         .is_special_six_cycle_len_graph = false,
+                                         .left_path_len_bound = 2,
                                          .right_path_len_bound = 3,
-                                         .cycle_size = 6,
+                                         .cycle_size = 4,
                                          .num_of_edges_to_cycle_bounds = {{2, 3}, {2, 3}, {2, 3}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
     cout << "VICTORY!" << endl;
   }
-  */
 
   // TestIsomoprhicChecker();
 
