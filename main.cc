@@ -445,6 +445,23 @@ class NashDigraph {
   struct LinearFunc {
     vector<int> cycle_part;
     vector<int> acyclic_part;
+    int64_t edges_mask;
+
+    bool operator==(const LinearFunc& rhs) const {
+      return edges_mask == rhs.edges_mask;
+    }
+
+    void UpdateEdgesMask() {
+      edges_mask = 0;
+
+      for (int edge_idx : cycle_part) {
+        edges_mask += (1LL << edge_idx);
+      }
+
+      for (int edge_idx : acyclic_part) {
+        edges_mask += (1LL << edge_idx);
+      }
+    }
 
     bool IsCycle() const {
       return !cycle_part.empty();
@@ -480,9 +497,11 @@ class NashDigraph {
       cout << "\n\n";
     }
 
+    /*
     bool operator==(const LinearFunc& rhs) const {
       return (cycle_part == rhs.cycle_part && acyclic_part == rhs.acyclic_part);
     }
+    */
   };
 
   NashDigraph(const string& path_to_file, bool is_complete) {
@@ -513,7 +532,6 @@ class NashDigraph {
     num_of_players_ = num_of_players;
     num_of_edges_ = num_of_edges;
     Preprocess(SolverParameters{});
-    is_limited_by_iters_ = false;
   }
 
   // For this constructor edges should be added manually
@@ -523,7 +541,6 @@ class NashDigraph {
         start_vertex_(start_vertex),
         num_of_players_(num_of_players),
         num_of_edges_(0) {
-    is_limited_by_iters_ = false;
   }
 
   void Preprocess(const SolverParameters& solver_params) {
@@ -609,6 +626,9 @@ class NashDigraph {
     LPSolver base_lp_second_player = ConfigureBaseLP(1, solver_params);
     for (size_t cx = 0; cx < n; ++cx) {
       for (size_t cy = 0; cy < m; ++cy) {
+        if (solver_params.are_pay_costs_positive && linear_funcs_by_cell[cx][cy].IsCycle()) {
+          continue;
+        }
         can_improve_row[cx][cy] = true;
         can_improve_col[cx][cy] = true;
       }
@@ -893,6 +913,36 @@ class NashDigraph {
     return lp_solver->PushInequality(ineq, -1);
   }
 
+  void UpdateMH(int player, int64_t edges_mask, int delta) {
+    MH[player][edges_mask] += delta;
+    for (const int cord : cords_by_edges_mask[player][edges_mask]) {
+      MH_cov[player][cord] += delta;
+    }
+  }
+
+  bool CanAddMH(int player, int64_t edges_mask) {
+    if (MH[player][edges_mask] > 0) {
+      return true;  // already added
+    }
+    int opp = 1 - player;
+    if (MH[opp][edges_mask] > 0) {
+      return false;  // We would get intersection on MH sets
+    }
+
+    bool can_add = true;
+    for (const int cord : cords_by_edges_mask[player][edges_mask]) {
+      MH_cov[player][cord]++;
+      if (MH_cov[player][cord] == MH_cov_max[player]) {
+        can_add = false;
+      }
+    }
+    for (const int cord : cords_by_edges_mask[player][edges_mask]) {
+      MH_cov[player][cord]--;
+    }
+
+    return can_add;
+  }
+
   bool GoFirstPlayer(const vector<vector<LinearFunc>>& linear_funcs_by_cell,
                      const SolverParameters& solver_params,
                      int cx,
@@ -903,6 +953,10 @@ class NashDigraph {
     int n = is_cell_used->size();
     // finding cell to improve for the first player
     for (int tx : col_classes_[cy]) {
+      int64_t edges_mask = linear_funcs_by_cell[tx][cy].edges_mask;
+      if (!CanAddMH(0, edges_mask)) {
+        continue;
+      }
       size_t old_lp_solver_size = lp_x->Size();
       if (linear_funcs_by_cell[tx][cy] == linear_funcs_by_cell[cx][cy]) {
         continue;
@@ -927,11 +981,13 @@ class NashDigraph {
             (*is_cell_used)[wx][cy] = 1;
           }
         }
+        UpdateMH(0, edges_mask, 1);
         bool branch_result =
             SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, tx, cy, 1, is_cell_used, lp_x, lp_y);
         if (branch_result) {
           return true;
         }
+        UpdateMH(0, edges_mask, -1);
         for (int colored_cell : colored_cells) {
           (*is_cell_used)[colored_cell][cy] = 0;
         }
@@ -953,6 +1009,10 @@ class NashDigraph {
     int m = (*is_cell_used)[0].size();
     // finding cell to improve for the second player
     for (int ty : row_classes_[cx]) {
+      int64_t edges_mask = linear_funcs_by_cell[cx][ty].edges_mask;
+      if (!CanAddMH(1, edges_mask)) {
+        continue;
+      }
       size_t old_lp_solver_size = lp_y->Size();
       if (linear_funcs_by_cell[cx][ty] == linear_funcs_by_cell[cx][cy]) {
         continue;
@@ -977,11 +1037,13 @@ class NashDigraph {
             (*is_cell_used)[cx][wy] = 1;
           }
         }
+        UpdateMH(1, edges_mask, 1);
         bool branch_result =
             SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, cx, ty, 0, is_cell_used, lp_x, lp_y);
         if (branch_result) {
           return true;
         }
+        UpdateMH(1, edges_mask, -1);
         for (int colored_cell : colored_cells) {
           (*is_cell_used)[cx][colored_cell] = 0;
         }
@@ -1046,8 +1108,6 @@ class NashDigraph {
       if (res) {
         return true;
       }
-      last_failed_cx_ = cx;
-      last_failed_cy_ = cy;
       num_of_fails_by_cell_[cx][cy]++;
       (*is_cell_used)[cx][cy] = 0;
       return false;
@@ -1058,8 +1118,6 @@ class NashDigraph {
       if (res) {
         return true;
       }
-      last_failed_cx_ = cx;
-      last_failed_cy_ = cy;
       num_of_fails_by_cell_[cx][cy]++;
       (*is_cell_used)[cx][cy] = 0;
       return false;
@@ -1069,8 +1127,6 @@ class NashDigraph {
     if (res) {
       return true;
     }
-    last_failed_cx_ = cx;
-    last_failed_cy_ = cy;
     num_of_fails_by_cell_[cx][cy]++;
     (*is_cell_used)[cx][cy] = 0;
     return false;
@@ -1113,6 +1169,7 @@ class NashDigraph {
         ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][cx], 0, &all_players_strategy);
         ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][cy], 1, &all_players_strategy);
         res[cx][cy] = GetLinFuncForPlayersByGlobalStrategy(all_players_strategy);
+        res[cx][cy].UpdateEdgesMask();
       }
     }
     return res;
@@ -1127,23 +1184,30 @@ class NashDigraph {
     if (n == 0 || m == 0) {
       return false;
     }
-    cerr << n << " " << m << endl;
     vector<vector<LinearFunc>> linear_funcs_by_cell = GetLinearFuncsByCell();
     vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
     int sx = -1, sy = -1;
+
+    MH_cov[1] = vector<int>(m, 0);
+    MH_cov[0] = vector<int>(n, 0);
+    MH_cov_max[1] = n;
+    MH_cov_max[0] = m;
+
     for (int i = 0; i < n; ++i) {
       for (int j = 0; j < m; ++j) {
-        if (linear_funcs_by_cell[i][j].IsCycle()) {
-          is_pair_of_strategies_used[i][j] = true;
-        } else {
+        if (!linear_funcs_by_cell[i][j].IsCycle()) {
           sx = i;
           sy = j;
+          int64_t edges_mask = linear_funcs_by_cell[i][j].edges_mask;
+          cords_by_edges_mask[0][edges_mask].emplace_back(i);
+          cords_by_edges_mask[1][edges_mask].emplace_back(j);
         }
       }
     }
 
     LPSolver lp_x = ConfigureBaseLP(0, solver_params);
     LPSolver lp_y = ConfigureBaseLP(1, solver_params);
+
     return SolveTwoPlayersCostsRec(
         linear_funcs_by_cell, solver_params, sx, sy, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
   }
@@ -1216,11 +1280,6 @@ class NashDigraph {
     sort(res.begin(), res.begin() + n);
     sort(res.begin() + n, res.begin() + 2 * n);
     return res;
-  }
-
-  void SetTransmissionsLimit(int x) {
-    is_limited_by_iters_ = true;
-    num_of_transmissions_limit_ = x;
   }
 
   void CheckHypoNew() {
@@ -1504,6 +1563,27 @@ class NashDigraph {
   }
 
  private:
+  unordered_map<int64_t, int> MH[2];  // Set of edges mask which are currently fixed in bruteforce as best in row/col
+  unordered_map<int64_t, vector<int>> cords_by_edges_mask[2];  // Set of complimentary coords for row/cols
+  vector<int> MH_cov[2];  // Number of MH strategies for player X in row/column Y is MH_cov[X][Y]
+  int MH_cov_max[2];      // Length of row/col for player X is MH_cov_max[X]
+
+  vector<vector<int>> num_of_fails_by_cell_;
+  vector<vector<int>> row_classes_;
+  vector<vector<int>> col_classes_;
+
+  vector<int> turns_;  // each value is in [-1; num_of_players), where -1 denotes terminal vertex
+  vector<vector<Edge>> edges_;
+  size_t start_vertex_;
+  size_t num_of_players_;
+  size_t num_of_edges_;
+  vector<vector<vector<int>>> all_possible_players_strategies_;
+  bool is_complete_;  // are costs of edges added?
+  double ineq_sat_percentage_;
+  LPSolver best_solver_first_player_;            // used only for SolveTwoPlayersRec
+  LPSolver best_solver_second_player_;           // used only for SolveTwoPlayersRec
+  vector<vector<int>> best_cells_cover_matrix_;  // used only for SolveTwoPlayersRec
+
   vector<int> CalcPlayersTotalSums(const vector<size_t>& strategy, size_t vertex_to_start, bool should_skip_visited) {
     size_t n = edges_.size();
     vector<int> total_costs(num_of_players_, 0);
@@ -1535,26 +1615,6 @@ class NashDigraph {
     }
     return total_costs;
   }
-
-  string rec_stack;
-  vector<vector<int>> num_of_fails_by_cell_;
-  int last_failed_cx_;
-  int last_failed_cy_;
-  vector<vector<int>> row_classes_;
-  vector<vector<int>> col_classes_;
-  int num_of_transmissions_limit_;
-  vector<int> turns_;  // each value is in [-1; num_of_players), where -1 denotes terminal vertex
-  vector<vector<Edge>> edges_;
-  size_t start_vertex_;
-  size_t num_of_players_;
-  size_t num_of_edges_;
-  vector<vector<vector<int>>> all_possible_players_strategies_;
-  bool is_complete_;  // are costs of edges added?
-  bool is_limited_by_iters_;
-  double ineq_sat_percentage_;
-  LPSolver best_solver_first_player_;            // used only for SolveTwoPlayersRec
-  LPSolver best_solver_second_player_;           // used only for SolveTwoPlayersRec
-  vector<vector<int>> best_cells_cover_matrix_;  // used only for SolveTwoPlayersRec
 };
 
 struct GraphId {
@@ -1737,7 +1797,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
 int x = 0;
 
 bool CheckNashDigraphSample(const SolverParameters& solver_params, double* max_ineq_rate, NashDigraph* G) {
-  // G->Print(false);
+  G->Print(false);
   G->Preprocess(solver_params);
   G->CalcImprovementsTable(solver_params);
 
@@ -1810,18 +1870,20 @@ bool TryToSolve(const SolverParameters& solver_params) {
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
 
-          G.Print(false);
           /*
+
+          G.Print(false);
           PathCollector path_collector(G.GetTurns().size());
           path_collector.CalcAllPathways(G.GetAdjacentMatrix());
           // cout << path_collector.pathways_by_start_and_finish[7][0].size() << endl;
 
           auto half_cycles = path_collector.GetAllHalfCycles(G.GetTurns());
           cout << half_cycles.first.size() << " " << half_cycles.second.size() << endl;
-          G.Preprocess(solver_params);
-          G.CalcImprovementsTable(solver_params);
-          G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
           */
+
+          // G.Preprocess(solver_params);
+          // G.CalcImprovementsTable(solver_params);
+          // G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
 
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
@@ -2008,81 +2070,10 @@ void TestIsomoprhicChecker() {
   assert(AreSpecialNashDigraphIsomorphic(G1, G2, graph_id));
 }
 
-void CheckHypoNewGraphs(int n, int add_m) {
-  vector<vector<int>> a(n, vector<int>(n));
-  int s = 0;
-  int t = n - 1;
-  vector<int> turns(n);
-  for (int i = 0; i < n - 1; ++i) {
-    turns[i] = GetRandomInt(0, 1);
-  }
-  turns[t] = -1;
-  vector<pair<int, int>> edges;
-  for (int i = 1; i <= n - 1; ++i) {
-    int par = GetRandomInt(0, i - 1);
-    edges.emplace_back(par, i);
-    a[par][i] = 1;
-  }
-  NashDigraph G(turns, 2, s);
-
-  auto add_rand_edge = [&](int v) -> bool {
-    int u = GetRandomInt(0, n - 1);
-    if (v == u || a[v][u]) {
-      return false;
-    }
-    edges.emplace_back(v, u);
-    a[v][u] = 1;
-    return true;
-  };
-
-  for (int it = 1; it <= add_m; ++it) {
-    int v = GetRandomInt(0, n - 2);
-    add_rand_edge(v);
-  }
-
-  for (int v = 0; v < n - 1; ++v) {
-    int deg_out = 0;
-    for (int u = 0; u < n; ++u) {
-      deg_out += a[v][u];
-    }
-    while (deg_out < 2) {
-      deg_out += add_rand_edge(v);
-    }
-  }
-
-  int edge_idx = 0;
-  for (const auto& edge : edges) {
-    G.AddEmptyEdge(edge.first, edge.second, edge_idx);
-    ++edge_idx;
-  }
-  G.Print(false);
-  cerr << edge_idx << endl;
-  if (!G.AreAllVerticesAccessibleFromStart()) {
-    cerr << "RETURN VERTICES!" << endl;
-    return;
-  }
-
-  if (!G.HasOnlyOneTerminal()) {
-    cerr << "RETURN TERMINALS!" << endl;
-    return;
-  }
-
-  if (!G.AreAllVerticesHasAtLeastTwoMoves()) {
-    cerr << "RETURN TWO MOVES!" << endl;
-    return;
-  }
-
-  G.Preprocess(SolverParameters{});
-  G.CalcImprovementsTable(SolverParameters{});
-  for (int it = 0; it <= 10000; ++it) {
-    G.SetRandomEdgeCosts(1, 10);
-    G.CheckHypoNew();
-  }
-}
-
 int main() {
   LPSolver::LaunchPython();
-
+  // CheckNegativeCostsTests();
+  // CheckTreeTests();
   // NashDigraph G("input.txt", false);
 
   /*
