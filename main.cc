@@ -2125,9 +2125,9 @@ int main() {
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = false,
                                          .left_path_len_bound = 2,
-                                         .right_path_len_bound = 3,
+                                         .right_path_len_bound = 2,
                                          .cycle_size = 4,
-                                         .num_of_edges_to_cycle_bounds = {{2, 3}, {2, 3}, {2, 3}},
+                                         .num_of_edges_to_cycle_bounds = {{4, 4}, {0, 4}, {2, 3}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true});
   if (res) {
