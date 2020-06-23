@@ -1668,33 +1668,40 @@ bool AreSpecialNashDigraphIsomorphic(const NashDigraph& n1, const NashDigraph& n
   vector<size_t> path_perm(path_size);
   iota(path_perm.begin(), path_perm.end(), cycle_size + 1);
   vector<size_t> big_perm(n);
+  vector<size_t> cycle_perm(cycle_size);
+  iota(cycle_perm.begin(), cycle_perm.end(), 1);
   do {
-    for (int curv = cycle_size + 1; curv <= cycle_size + path_size; ++curv) {
-      big_perm[curv] = path_perm[curv - cycle_size - 1];
+    for (int i = 1; i <= cycle_size; ++i) {
+      big_perm[i] = cycle_perm[i - 1];
     }
-    bool is_cert_found = true;
-    for (int curv = 0; curv < n; ++curv) {
-      is_cert_found &= (turns_n1[curv] == turns_n2[big_perm[curv]]);
-    }
-    for (int v = 0; v < n; ++v) {
-      for (int u = 0; u < n; ++u) {
-        if (adj_m1[v][u]) {
-          is_cert_found &= adj_m2[big_perm[v]][big_perm[u]];
-        } else {
-          is_cert_found &= !adj_m2[big_perm[v]][big_perm[u]];
+    do {
+      for (int curv = cycle_size + 1; curv <= cycle_size + path_size; ++curv) {
+        big_perm[curv] = path_perm[curv - cycle_size - 1];
+      }
+      bool is_cert_found = true;
+      for (int curv = 0; curv < n; ++curv) {
+        is_cert_found &= (turns_n1[curv] == turns_n2[big_perm[curv]]);
+      }
+      for (int v = 0; v < n; ++v) {
+        for (int u = 0; u < n; ++u) {
+          if (adj_m1[v][u]) {
+            is_cert_found &= adj_m2[big_perm[v]][big_perm[u]];
+          } else {
+            is_cert_found &= !adj_m2[big_perm[v]][big_perm[u]];
+          }
+          if (!is_cert_found) {
+            break;
+          }
         }
         if (!is_cert_found) {
           break;
         }
       }
-      if (!is_cert_found) {
-        break;
+      if (is_cert_found) {
+        return true;
       }
-    }
-    if (is_cert_found) {
-      return true;
-    }
-  } while (next_permutation(path_perm.begin(), path_perm.end()));
+    } while (next_permutation(path_perm.begin(), path_perm.end()));
+  } while (next_permutation(cycle_perm.begin(), cycle_perm.end()));
   return false;
 }
 
@@ -1723,6 +1730,14 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   bool is_bipartite = true;
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int nghbr_mask = choice_to_build_path[vertex_in_path];
+    if (vertex_in_path <= 1) { // a -> b, b -> e prefix
+      int bit_pos = path_size - (vertex_in_path + 1) - 1;
+      int next_bit = (nghbr_mask >> bit_pos);
+      if (!next_bit) {
+        return false;
+      }
+    }
+    
     for (int next_vertex_num = vertex_in_path + 1; next_vertex_num < path_size; ++next_vertex_num) {
       int bit_pos = path_size - next_vertex_num - 1;
       int is_connected = (nghbr_mask >> bit_pos) & 1;
@@ -1869,6 +1884,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
           total_num_of_classes++;
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
+          G.Print(false);
 
           /*
 
@@ -1884,12 +1900,13 @@ bool TryToSolve(const SolverParameters& solver_params) {
           // G.Preprocess(solver_params);
           // G.CalcImprovementsTable(solver_params);
           // G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
-
+          /*
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
             return true;
           }
           cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
+          */
         }
       }
     }
@@ -2124,8 +2141,8 @@ int main() {
 
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = false,
-                                         .left_path_len_bound = 2,
-                                         .right_path_len_bound = 2,
+                                         .left_path_len_bound = 3,
+                                         .right_path_len_bound = 3,
                                          .cycle_size = 4,
                                          .num_of_edges_to_cycle_bounds = {{4, 4}, {0, 4}, {2, 3}},
                                          .offset_filename = "offset.txt",
