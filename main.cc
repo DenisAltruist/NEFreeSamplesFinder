@@ -1884,7 +1884,6 @@ bool TryToSolve(const SolverParameters& solver_params) {
           total_num_of_classes++;
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
-          G.Print(false);
 
           /*
 
@@ -1900,13 +1899,12 @@ bool TryToSolve(const SolverParameters& solver_params) {
           // G.Preprocess(solver_params);
           // G.CalcImprovementsTable(solver_params);
           // G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
-          /*
+          
           bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
           if (res) {
             return true;
           }
           cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
-          */
         }
       }
     }
