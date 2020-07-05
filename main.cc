@@ -2485,13 +2485,12 @@ bool TryToSolve(const SolverParameters& solver_params) {
           // G.Preprocess(solver_params);
           // G.CalcImprovementsTable(solver_params);
           // G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
-          /*
-              bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
-              if (res) {
-                return res;
-              }
-              cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
-              */
+
+          bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
+          if (res) {
+            return res;
+          }
+          cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
         }
       }
     }
