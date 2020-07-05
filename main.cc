@@ -323,7 +323,78 @@ struct Path {
 };
 
 struct HalfCycle {
-  Path lhs_path, rhs_path;
+  Path path[2];  // path[0] < path[1]
+  vector<int> edge_idxs[2];
+
+  uint64_t code;
+  uint64_t rev_code;
+
+  void Print() const {
+    for (int x : path[0].vertices) {
+      cout << x << " ";
+    }
+    cout << endl;
+    for (int x : path[1].vertices) {
+      cout << x << " ";
+    }
+    cout << endl;
+    cout << endl;
+  }
+
+  void CalcCode() {
+    code = 0;
+    rev_code = 0;
+    assert(path[0].vertices.size() >= 2);
+    assert(path[1].vertices.size() >= 2);
+    const int base = 47;  // prime hash base
+    auto add_code = [&](const Path& path, uint64_t& val) -> void {
+      for (int x : path.vertices) {
+        val = val * base + x;
+      }
+    };
+    add_code(path[0], code);
+    add_code(path[1], code);
+    add_code(path[1], rev_code);
+    add_code(path[0], rev_code);
+    if (path[0].vertices[1] > path[1].vertices[1]) {
+      swap(code, rev_code);
+    }
+  }
+
+  void Validate(const vector<int>& turns) const {
+    assert(path[0].vertices.size() >= 2);
+    assert(path[1].vertices.size() >= 2);
+    assert(path[0].vertices[0] == path[1].vertices[0]);
+    assert(path[0].vertices.back() == path[1].vertices.back());
+    map<int, int> cntv;
+    for (int path_idx = 0; path_idx < 2; ++path_idx) {
+      set<int> path_set;  // to check that all vertices in path are distinct
+      for (int v : path[path_idx].vertices) {
+        assert(path_set.count(v) == 0);
+        path_set.insert(v);
+        cntv[v]++;
+      }
+    }
+    int prev = -1;
+    int turn_own = -1;
+    for (int curv : path[0].vertices) {
+      int cur_vertex_own = (cntv[curv] == 2);  // in intersection
+      int prev_vertex_own = (cntv[prev] == 2);
+      if (prev != -1 && prev_vertex_own == 1 && cur_vertex_own == 0) {
+        assert(turns[prev] != -1);
+        if (turn_own == -1) {
+          turn_own = turns[prev];
+        } else {
+          assert(turn_own == turns[prev]);
+        }
+      }
+      prev = curv;
+    }
+  }
+
+  bool operator==(const HalfCycle& rhs) const {
+    return code == rhs.code || code == rhs.rev_code;
+  }
 };
 
 struct PathCollector {
@@ -343,8 +414,10 @@ struct PathCollector {
         }
         auto tmp_res = GetHalfCycles(v, u);
         for (const auto& P : tmp_res) {
-          HalfCycle to_push{.lhs_path = pathways_by_start_and_finish[v][u][P.first],
-                            .rhs_path = pathways_by_start_and_finish[v][u][P.second]};
+          HalfCycle to_push;
+          to_push.path[0] = pathways_by_start_and_finish[v][u][P.first];
+          to_push.path[1] = pathways_by_start_and_finish[v][u][P.second];
+          to_push.CalcCode();
           if (turns[v] == 0) {
             res0.emplace_back(to_push);
           } else if (turns[v] == 1) {
@@ -360,26 +433,24 @@ struct PathCollector {
     const vector<Path>& pathes = pathways_by_start_and_finish[start][finish];
     vector<pair<int, int>> res;
     for (size_t i = 0; i < pathes.size(); ++i) {
-      for (size_t j = 0; j < pathes.size(); ++j) {
-        if (i == j) {
-          continue;
-        }
+      for (size_t j = i + 1; j < pathes.size(); ++j) {
         vector<bool> is_used(n);
-        bool are_intersected = false;
-        for (int v : pathes[i].vertices) {
-          if (v == start || v == finish) {
-            continue;
+
+        auto check_path = [&](const Path& path) -> bool {
+          bool res = false;
+          for (int v : path.vertices) {
+            if (v == start || v == finish) {
+              continue;
+            }
+            res |= is_used[v];
+            is_used[v] = true;
           }
-          are_intersected |= is_used[v];
-          is_used[v] = true;
-        }
-        for (int v : pathes[i].vertices) {
-          if (v == start || v == finish) {
-            continue;
-          }
-          are_intersected |= is_used[v];
-          is_used[v] = true;
-        }
+          return res;
+        };
+
+        check_path(pathes[i]);
+        bool are_intersected = check_path(pathes[j]);
+
         if (are_intersected) {
           continue;
         }
@@ -435,6 +506,23 @@ struct PathCollector {
         }
       }
     }
+  }
+
+  int GetPathwaysCnt() const {
+    int res = 0;
+    for (int v = 0; v < n; ++v) {
+      for (int u = 0; u < n; ++u) {
+        if (u == v) {
+          continue;
+        }
+        res += pathways_by_start_and_finish[v][u].size();
+      }
+    }
+    return res;
+  }
+
+  int GetPathwaysCnt(int v, int u) const {
+    return pathways_by_start_and_finish[v][u].size();
   }
 };
 
@@ -496,12 +584,228 @@ class NashDigraph {
       }
       cout << "\n\n";
     }
+  };
 
-    /*
-    bool operator==(const LinearFunc& rhs) const {
-      return (cycle_part == rhs.cycle_part && acyclic_part == rhs.acyclic_part);
+  struct PathPosets {
+    vector<vector<int>> graph;
+    vector<pair<int, int>> edges;
+    set<pair<int, int>> edges_set;
+
+    vector<int> block_sizes;
+
+    vector<int> dsu;
+    vector<pair<int, int>> dsu_history;
+    vector<int> set_size;
+    vector<pair<int, int>> set_size_history;
+
+    map<int64_t, int> path_idx_by_mask;
+    map<pair<int64_t, int64_t>, vector<pair<int, int>>> path_pairs;
+    int n, m;
+
+    PathPosets() = default;
+
+    PathPosets(const vector<LinearFunc>& paths, int edges_num) {
+      dsu.resize(paths.size());
+      set_size.resize(paths.size());
+      graph.resize(paths.size());
+
+      for (size_t i = 0; i < paths.size(); ++i) {
+        dsu[i] = i;
+        set_size[i] = 1;
+      }
+
+      int cur_path_idx = 0;
+      for (const auto& path : paths) {
+        if (path_idx_by_mask.count(path.edges_mask) > 0) {
+          continue;
+        }
+        path_idx_by_mask[path.edges_mask] = cur_path_idx++;
+      }
+
+      cerr << "Num of unique paths: " << cur_path_idx << endl;
+
+      m = edges_num;
+
+      for (size_t i = 0; i < paths.size(); ++i) {
+        for (size_t j = 0; j < paths.size(); ++j) {
+          if (i == j) {
+            continue;
+          }
+
+          int i_idx = path_idx_by_mask[paths[i].edges_mask];
+          int j_idx = path_idx_by_mask[paths[j].edges_mask];
+
+          path_pairs[BuildPathDiff(paths[i], paths[j])].emplace_back(i_idx, j_idx);
+        }
+      }
+
+      n = cur_path_idx;
     }
-    */
+
+    pair<int64_t, int64_t> BuildPathDiff(const LinearFunc& lhs, const LinearFunc& rhs) {
+      int64_t i_mask = 0;
+      int64_t j_mask = 0;
+      int64_t xor_edges_mask = (lhs.edges_mask ^ rhs.edges_mask);
+      for (int edge_idx = m - 1; edge_idx >= 0; --edge_idx) {
+        int is_active = (xor_edges_mask >> edge_idx) & 1LL;
+        if (!is_active) {
+          continue;
+        }
+        int i_active = (lhs.edges_mask >> edge_idx) & 1;
+        if (i_active) {
+          i_mask += (1LL << edge_idx);
+        } else {
+          j_mask += (1LL << edge_idx);
+        }
+      }
+      return make_pair(i_mask, j_mask);
+    }
+
+    size_t Size() {
+      return edges.size();
+    }
+
+    void Rollback() {
+      assert(!edges.empty());
+      assert(!dsu_history.empty());
+      assert(!set_size_history.empty());
+
+      int v = edges.back().first;
+      int u = edges.back().second;
+      edges.pop_back();
+      edges_set.erase(make_pair(v, u));
+
+      assert(!graph[v].empty());
+      graph[v].pop_back();
+
+      auto pair = dsu_history.back();
+      if (pair.first != -1) {
+        dsu[pair.first] = pair.second;
+      }
+      dsu_history.pop_back();
+
+      pair = set_size_history.back();
+      if (pair.first != -1) {
+        set_size[pair.first] = pair.second;
+      }
+      set_size_history.pop_back();
+    }
+
+    void dfs(int v, vector<bool>* is_vis) {
+      (*is_vis)[v] = true;
+      for (int u : graph[v]) {
+        if (!(*is_vis)[u]) {
+          dfs(u, is_vis);
+        }
+      }
+    }
+
+    bool HasPath(int v, int u) {
+      vector<bool> is_vis(n);
+      /*
+      queue<int> q;
+      q.push(v);
+      while (!q.empty() && !is_vis[u]) {
+        int x = q.front();
+        q.pop();
+        for (int y : graph[x]) {
+          if (!is_vis[y]) {
+            is_vis[y] = true;
+            q.push(y);
+          }
+        }
+      }
+      */
+      // cerr << n << " " << edges.size() << endl;
+      dfs(v, &is_vis);
+      return is_vis[u];
+    }
+
+    bool AddBlock(const LinearFunc& v_path, const LinearFunc& u_path) {
+      pair<int64_t, int64_t> path_diff = BuildPathDiff(v_path, u_path);
+
+      int cnt = 0;
+      bool is_ok = true;
+      const auto& pairs = path_pairs[path_diff];
+      // cerr << pairs.size() << " " << edges.size() << endl;
+      for (const auto& edge : pairs) {
+        if (edges_set.count(edge) > 0) {
+          continue;
+        }
+        bool res = AddRawEdge(edge.first, edge.second);
+        cnt += res;
+        if (!res) {
+          is_ok = false;
+          break;
+        }
+      }
+      if (is_ok) {
+        block_sizes.emplace_back(cnt);
+        return true;
+      }
+      while (cnt > 0) {
+        --cnt;
+        Rollback();
+      }
+      return false;
+    }
+
+    void PopBlock() {
+      assert(!block_sizes.empty());
+      int cnt = block_sizes.back();
+      while (cnt > 0) {
+        Rollback();
+        cnt--;
+      }
+      block_sizes.pop_back();
+    }
+
+    bool AddEdge(const LinearFunc& v_path, const LinearFunc& u_path) {
+      int v = path_idx_by_mask[v_path.edges_mask];
+      int u = path_idx_by_mask[u_path.edges_mask];
+
+      return AddRawEdge(u, v);
+    }
+
+    int GetRoot(int v) {
+      if (v == dsu[v]) {
+        return v;
+      }
+      return GetRoot(dsu[v]);
+    }
+
+    bool JoinSets(int v, int u) {
+      v = GetRoot(v);
+      u = GetRoot(u);
+      if (v == u) {
+        return false;
+      }
+      if (set_size[v] > set_size[u]) {
+        swap(v, u);
+      }
+      dsu_history.emplace_back(v, dsu[v]);
+      dsu[v] = u;
+      set_size_history.emplace_back(v, set_size[v]);
+      set_size[v] += set_size[u];
+      return true;
+    }
+
+    bool AddRawEdge(int v, int u) {
+      bool is_joined = false;
+      // bool is_joined = JoinSets(v, u);
+      if (is_joined || !HasPath(u, v)) {
+        graph[v].emplace_back(u);
+        edges.emplace_back(v, u);
+        edges_set.insert(make_pair(v, u));
+
+        /* dumb history */
+        set_size_history.emplace_back(-1, -1);
+        dsu_history.emplace_back(-1, -1);
+
+        return true;
+      }
+      return false;
+    }
   };
 
   NashDigraph(const string& path_to_file, bool is_complete) {
@@ -614,6 +918,118 @@ class NashDigraph {
     return res;
   }
 
+  vector<HalfCycle> BuildHalfCycleDecomposition(const LinearFunc& minus_path, const LinearFunc& plus_path) {
+    assert(minus_path.cycle_part.empty());
+    assert(plus_path.cycle_part.empty());
+
+    set<int> minus_edges_idxs;
+    set<int> edges_intersection;
+
+    for (int edge_idx : minus_path.acyclic_part) {
+      minus_edges_idxs.insert(edge_idx);
+    }
+
+    for (int edge_idx : plus_path.acyclic_part) {
+      if (minus_edges_idxs.count(edge_idx) > 0) {
+        edges_intersection.insert(edge_idx);
+      }
+    }
+
+    map<int, Edge> edge_by_idx;
+    for (size_t v = 0; v < turns_.size(); ++v) {
+      for (const Edge& edge : edges_[v]) {
+        edge_by_idx[edge.idx] = edge;
+      }
+    }
+
+    auto get_path_from_edges = [&](const vector<int>& edge_idxs) -> vector<int> {
+      vector<int> res;
+      for (size_t i = 0; i < edge_idxs.size(); ++i) {
+        int edge_idx = edge_idxs[i];
+        const Edge& e = edge_by_idx[edge_idx];
+        if (i == 0) {
+          res.emplace_back(e.start);
+        }
+        res.emplace_back(e.finish);
+      }
+      return res;
+    };
+
+    vector<int> path_minus = get_path_from_edges(minus_path.acyclic_part);
+    vector<int> path_plus = get_path_from_edges(plus_path.acyclic_part);
+
+    ostringstream out;
+    for (int v : path_minus) {
+      out << to_string(v) << " ";
+    }
+    out << "|";
+    for (int v : path_plus) {
+      out << " " << to_string(v);
+    }
+    cout << out.str() << endl;
+
+    assert(path_minus.size() >= 2);
+    assert(path_plus.size() >= 2);
+
+    set<int> plus_vertices;
+    set<int> intersection;
+    for (int v : path_plus) {
+      plus_vertices.insert(v);
+    }
+    for (int v : path_minus) {
+      auto it = plus_vertices.find(v);
+      if (it != plus_vertices.end()) {
+        intersection.insert(v);
+      }
+    }
+    assert(intersection.size() >= 2);
+
+    int half_cycles_num = 0;
+    int prev_edge_own = 1;
+
+    for (int edge_idx : minus_path.acyclic_part) {
+      int cur_edge_own = edges_intersection.count(edge_idx) > 0;
+      if (prev_edge_own == 1 && cur_edge_own == 0) {
+        half_cycles_num++;
+      }
+      prev_edge_own = cur_edge_own;
+    }
+
+    cerr << half_cycles_num << endl;
+    assert(half_cycles_num >= 1);
+
+    vector<HalfCycle> decomposition(half_cycles_num);
+    for (int path_idx = 0; path_idx < 2; ++path_idx) {
+      int cur_cycle_idx = -1;
+      vector<int> edge_idxs = minus_path.acyclic_part;
+      if (path_idx == 1) {
+        edge_idxs = plus_path.acyclic_part;
+      }
+      for (int edge_idx : edge_idxs) {
+        if (edges_intersection.count(edge_idx) > 0) {
+          continue;
+        }
+        const Edge& e = edge_by_idx[edge_idx];
+        if (intersection.count(e.start) > 0) {
+          cur_cycle_idx++;
+        }
+        auto add_vertex = [&](int vertex) -> void {
+          if (cur_cycle_idx >= 0 && cur_cycle_idx < decomposition.size()) {
+            decomposition[cur_cycle_idx].path[path_idx].vertices.emplace_back(vertex);
+          }
+        };
+        add_vertex(e.start);
+        if (intersection.count(e.finish) > 0) {
+          add_vertex(e.finish);
+        }
+      }
+    }
+    for (HalfCycle& hc : decomposition) {
+      hc.CalcCode();
+    }
+    return decomposition;
+  }
+
   void CalcImprovementsTable(const SolverParameters& solver_params) {
     size_t n = all_possible_players_strategies_[0].size();
     size_t m = all_possible_players_strategies_[1].size();
@@ -662,6 +1078,88 @@ class NashDigraph {
         }
       }
     }
+
+    /*
+    PathCollector path_collector(GetTurns().size());
+    path_collector.CalcAllPathways(GetAdjacentMatrix());
+    cerr << path_collector.GetPathwaysCnt(start_vertex_, 0) << endl;
+    exit(0);
+
+    auto half_cycles = path_collector.GetAllHalfCycles(GetTurns());
+
+    half_cycles_cx_ = half_cycles.first;
+    half_cycles_cy_ = half_cycles.second;
+
+    best_choice_hcycles_x_ = vector<vector<vector<HalfCycleVar>>>(n, vector<vector<HalfCycleVar>>(m));
+    best_choice_hcycles_y_ = vector<vector<vector<HalfCycleVar>>>(n, vector<vector<HalfCycleVar>>(m));
+
+    for (int cx = 0; cx < n; ++cx) {
+      for (int cy = 0; cy < m; ++cy) {
+        if (!can_improve_row[cx][cy]) {
+          continue;
+        }
+        for (int wy : row_classes_[cx]) {
+          const LinearFunc& plus_path = linear_funcs_by_cell[cx][cy];
+          const LinearFunc& minus_path = linear_funcs_by_cell[cx][wy];
+          if (plus_path == minus_path) {
+            continue;
+          }
+          vector<HalfCycle> decomposition = BuildHalfCycleDecomposition(minus_path, plus_path);
+          for (const HalfCycle& cycle : decomposition) {
+            int found_idx = -1;
+            for (size_t cycle_idx = 0; cycle_idx < half_cycles_cy_.size(); ++cycle_idx) {
+              const HalfCycle& cm = half_cycles_cy_[cycle_idx];
+              cm.Validate(turns_);
+              if (cm == cycle) {
+                found_idx = cycle_idx;
+                break;
+              }
+            }
+            assert(found_idx >= 0);
+            int sign = 1;
+            if (cycle.code == half_cycles_cy_[found_idx].code) {
+              sign = 0;
+            }
+            best_choice_hcycles_y_[cx][cy].emplace_back(HalfCycleVar{.index = found_idx, .sign = sign});
+          }
+        }
+      }
+    }
+
+    for (int cy = 0; cy < m; ++cy) {
+      for (int cx = 0; cx < n; ++cx) {
+        if (!can_improve_col[cx][cy]) {
+          continue;
+        }
+        for (int wx : col_classes_[cy]) {
+          const LinearFunc& plus_path = linear_funcs_by_cell[cx][cy];
+          const LinearFunc& minus_path = linear_funcs_by_cell[wx][cy];
+          if (plus_path == minus_path) {
+            continue;
+          }
+          vector<HalfCycle> decomposition = BuildHalfCycleDecomposition(minus_path, plus_path);
+          for (const HalfCycle& cycle : decomposition) {
+            int found_idx = -1;
+            for (size_t cycle_idx = 0; cycle_idx < half_cycles_cx_.size(); ++cycle_idx) {
+              const HalfCycle& cm = half_cycles_cx_[cycle_idx];
+              cm.Validate(turns_);
+              if (cm == cycle) {
+                found_idx = cycle_idx;
+                break;
+              }
+            }
+            assert(found_idx >= 0);
+            int sign = 1;
+            if (cycle.code == half_cycles_cx_[found_idx].code) {
+              sign = 0;
+            }
+            best_choice_hcycles_x_[cx][cy].emplace_back(HalfCycleVar{.index = found_idx, .sign = sign});
+          }
+        }
+      }
+    }
+    exit(0);
+    */
   }
 
   void Print(bool with_costs) {
@@ -710,21 +1208,98 @@ class NashDigraph {
     all_possible_players_strategies_[player_idx] = GenAllPossibleChoices(player_num_of_edges_limits);
   }
 
+  void DfsRemoveStrategy(int v, map<int, int> edge_by_vertex, vector<int>* is_used) {
+    (*is_used)[v] = true;
+    if (turns_[v] == -1) {
+      return;
+    }
+
+    auto it = edge_by_vertex.find(v);
+    if (it != edge_by_vertex.end()) {
+      int u = it->second;
+      assert(u != v);
+      DfsRemoveStrategy(u, edge_by_vertex, is_used);
+      return;
+    }
+
+    for (const auto& edge : edges_[v]) {
+      int u = edge.finish;
+      if (!(*is_used)[u]) {
+        assert(u != v);
+        DfsRemoveStrategy(u, edge_by_vertex, is_used);
+      }
+    }
+  }
+
   void CalcAllPossiblePlayersStrategies(const SolverParameters& solver_params) {
     all_possible_players_strategies_.resize(num_of_players_);
     for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
       CalcPlayerStrategies(player_idx);
-      if (solver_params.need_to_remove_one_strategy) {
-        if (player_idx == 1) {
-          PrintAllPlayerStrategies(1);
-          Shuffle(&all_possible_players_strategies_[1]);
-          assert(!all_possible_players_strategies_[1].empty());
-          all_possible_players_strategies_[1].pop_back();
-          cout << "Strategies after deletion:\n\n";
-          PrintAllPlayerStrategies(1);
-        }
+    }
+
+    if (!solver_params.need_to_remove_one_strategy) {
+      return;
+    }
+
+    int player_idx = 0;
+
+    PrintAllPlayerStrategies(player_idx);
+    set<int> sts_to_ban;
+    sts_to_ban.insert(0);
+
+    const vector<int>& strategy = all_possible_players_strategies_[player_idx][0];
+
+    map<int, int> edge_by_vertex;
+    size_t st_idx = 0;
+    for (size_t v = 0; v < turns_.size(); ++v) {
+      if (turns_[v] == player_idx) {
+        edge_by_vertex[v] = edges_[v][strategy[st_idx++]].finish;
       }
     }
+
+    vector<int> is_used(turns_.size(), 0);
+
+    DfsRemoveStrategy(start_vertex_, edge_by_vertex, &is_used);
+
+    set<int> free_st_idxs;
+    st_idx = 0;
+    for (size_t v = 0; v < turns_.size(); ++v) {
+      if (turns_[v] != player_idx) {
+        continue;
+      }
+
+      if (!is_used[v]) {
+        cerr << v << " " << st_idx << endl;
+        free_st_idxs.insert(st_idx);
+      }
+      st_idx++;
+    }
+
+    for (size_t j = 1; j < all_possible_players_strategies_[player_idx].size(); ++j) {
+      const vector<int>& st_sample = all_possible_players_strategies_[player_idx][j];
+      bool is_same = true;
+      for (size_t k = 0; k < st_sample.size(); ++k) {
+        if (free_st_idxs.count(k) > 0) {
+          continue;
+        }
+        if (st_sample[k] != strategy[k]) {
+          is_same = false;
+          break;
+        }
+      }
+      if (is_same) {
+        sts_to_ban.insert(j);
+      }
+    }
+    vector<vector<int>> sifted_strategies;
+    for (size_t j = 0; j < all_possible_players_strategies_[player_idx].size(); ++j) {
+      if (sts_to_ban.count(j) > 0) {
+        continue;
+      }
+      sifted_strategies.emplace_back(all_possible_players_strategies_[player_idx][j]);
+    }
+    all_possible_players_strategies_[player_idx] = sifted_strategies;
+    PrintAllPlayerStrategies(player_idx);
   }
 
   void ApplyPlayerStrategyToGlobalOne(const vector<int>& player_strategy,
@@ -884,7 +1459,7 @@ class NashDigraph {
   bool AddInequality(const LinearFunc& old_func,
                      const LinearFunc& new_func,
                      const SolverParameters& solver_params,
-                     LPSolver* lp_solver) {
+                     PathPosets* path_posets) {
     if (old_func.IsCycle() || new_func.IsCycle()) {
       if (solver_params.are_pay_costs_positive) {
         if (old_func.IsCycle()) {
@@ -895,22 +1470,9 @@ class NashDigraph {
         }
         return false;
       }
-      if (old_func.IsCycle()) {
-        lp_solver->PushInequality(old_func.GetVectorizedCycle(num_of_edges_, -1), -1);  // c > 0
-      }
-      if (new_func.IsCycle()) {
-        lp_solver->PushInequality(new_func.GetVectorizedCycle(num_of_edges_, 1), -1);  // c < 0
-      }
       return true;
     }
-    vector<int> ineq(num_of_edges_);
-    for (int edge_idx : new_func.acyclic_part) {
-      ineq[edge_idx] += 1;
-    }
-    for (int edge_idx : old_func.acyclic_part) {
-      ineq[edge_idx] -= 1;
-    }
-    return lp_solver->PushInequality(ineq, -1);
+    return path_posets->AddBlock(old_func, new_func);
   }
 
   void UpdateMH(int player, int64_t edges_mask, int delta) {
@@ -957,7 +1519,7 @@ class NashDigraph {
       if (!CanAddMH(0, edges_mask)) {
         continue;
       }
-      size_t old_lp_solver_size = lp_x->Size();
+      size_t old_posets_size = path_posets_x_.Size();
       if (linear_funcs_by_cell[tx][cy] == linear_funcs_by_cell[cx][cy]) {
         continue;
       }
@@ -967,10 +1529,10 @@ class NashDigraph {
         if (func_idx == tx) {
           continue;
         }
-        can_add_ineqs &=
-          AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, lp_x);
+        can_add_ineqs &= AddInequality(
+          linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, &path_posets_x_);
       }
-      if (can_add_ineqs && lp_x->IsFeasible()) {
+      if (can_add_ineqs) {
         vector<int> colored_cells;
         for (int wx = 0; wx < n; ++wx) {
           if (linear_funcs_by_cell[wx][cy] == linear_funcs_by_cell[tx][cy]) {
@@ -992,8 +1554,9 @@ class NashDigraph {
           (*is_cell_used)[colored_cell][cy] = 0;
         }
       }
-      while (lp_x->Size() != old_lp_solver_size) {
-        lp_x->PopInequality();
+
+      while (path_posets_x_.Size() != old_posets_size) {
+        path_posets_x_.PopBlock();
       }
     }
     return false;
@@ -1013,7 +1576,7 @@ class NashDigraph {
       if (!CanAddMH(1, edges_mask)) {
         continue;
       }
-      size_t old_lp_solver_size = lp_y->Size();
+      size_t old_posets_size = path_posets_y_.Size();
       if (linear_funcs_by_cell[cx][ty] == linear_funcs_by_cell[cx][cy]) {
         continue;
       }
@@ -1023,10 +1586,10 @@ class NashDigraph {
         if (func_idx == ty) {
           continue;
         }
-        can_add_ineqs &=
-          AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, lp_y);
+        can_add_ineqs &= AddInequality(
+          linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, &path_posets_y_);
       }
-      if (can_add_ineqs && lp_y->IsFeasible()) {
+      if (can_add_ineqs) {
         vector<int> colored_cells;
         for (int wy = 0; wy < m; ++wy) {
           if (linear_funcs_by_cell[cx][wy] == linear_funcs_by_cell[cx][ty]) {
@@ -1048,8 +1611,8 @@ class NashDigraph {
           (*is_cell_used)[cx][colored_cell] = 0;
         }
       }
-      while (lp_y->Size() != old_lp_solver_size) {
-        lp_y->PopInequality();
+      while (path_posets_y_.Size() != old_posets_size) {
+        path_posets_y_.PopBlock();
       }
     }
     return false;
@@ -1087,8 +1650,9 @@ class NashDigraph {
         return true;
       }
       double sat_percentage_ = double(num_of_used_cells) / (n * m);
+      // cerr << "Sat percentage: " << sat_percentage_ << std::endl;
       if (sat_percentage_ > ineq_sat_percentage_) {
-        cerr << "Updated sat percentage: " << sat_percentage_ << std::endl;
+        // cerr << "Updated sat percentage: " << sat_percentage_ << std::endl;
         ineq_sat_percentage_ = sat_percentage_;
         best_solver_first_player_ = *lp_x;
         best_solver_second_player_ = *lp_y;
@@ -1185,6 +1749,20 @@ class NashDigraph {
       return false;
     }
     vector<vector<LinearFunc>> linear_funcs_by_cell = GetLinearFuncsByCell();
+
+    vector<LinearFunc> flatten_lin_funcs;
+    for (int cx = 0; cx < n; ++cx) {
+      for (int cy = 0; cy < m; ++cy) {
+        if (linear_funcs_by_cell[cx][cy].IsCycle()) {
+          continue;
+        }
+        flatten_lin_funcs.emplace_back(linear_funcs_by_cell[cx][cy]);
+      }
+    }
+
+    path_posets_x_ = PathPosets(flatten_lin_funcs, num_of_edges_);
+    path_posets_y_ = path_posets_x_;
+
     vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
     int sx = -1, sy = -1;
 
@@ -1563,6 +2141,18 @@ class NashDigraph {
   }
 
  private:
+  struct HalfCycleVar {
+    int player_num;  // == 0 => 'half_cycles_cx_', == 1 => 'half_cycles_cy_'
+    int index;       // index in 'half_cycles_cx_' or 'half_cycles_cy_'
+    int sign;        // 0, 1
+  };
+
+  PathPosets path_posets_x_, path_posets_y_;
+
+  vector<HalfCycle> half_cycles_cx_, half_cycles_cy_;
+  vector<vector<vector<HalfCycleVar>>> best_choice_hcycles_x_;
+  vector<vector<vector<HalfCycleVar>>> best_choice_hcycles_y_;
+
   unordered_map<int64_t, int> MH[2];  // Set of edges mask which are currently fixed in bruteforce as best in row/col
   unordered_map<int64_t, vector<int>> cords_by_edges_mask[2];  // Set of complimentary coords for row/cols
   vector<int> MH_cov[2];  // Number of MH strategies for player X in row/column Y is MH_cov[X][Y]
@@ -1730,6 +2320,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   bool is_bipartite = true;
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int nghbr_mask = choice_to_build_path[vertex_in_path];
+
     if (vertex_in_path <= 1) {  // a -> b, b -> e prefix
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
@@ -1883,26 +2474,24 @@ bool TryToSolve(const SolverParameters& solver_params) {
           cout << "Graph id to check: " << total_num_of_classes << endl;
           cur_bucket.emplace_back(G);
 
-          /*
+          // G.Print(false);
 
-          G.Print(false);
+          /*
           PathCollector path_collector(G.GetTurns().size());
           path_collector.CalcAllPathways(G.GetAdjacentMatrix());
-          // cout << path_collector.pathways_by_start_and_finish[7][0].size() << endl;
-
           auto half_cycles = path_collector.GetAllHalfCycles(G.GetTurns());
-          cout << half_cycles.first.size() << " " << half_cycles.second.size() << endl;
           */
 
           // G.Preprocess(solver_params);
           // G.CalcImprovementsTable(solver_params);
           // G.BuildHalfCycleStrategiesBipartite(half_cycles, solver_params);
-
-          bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
-          if (res) {
-            return true;
-          }
-          cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
+          /*
+              bool res = CheckNashDigraphSample(solver_params, &max_ineq_rate, &G);
+              if (res) {
+                return res;
+              }
+              cerr << "Cur inequality sat rate: " << max_ineq_rate << endl;
+              */
         }
       }
     }
@@ -1950,9 +2539,44 @@ bool CheckIfTreeValidForTest(const vector<vector<int>>& edges, const vector<int>
 }
 
 void CheckTreeTests() {
-  int kMaxTreeSize = 15;
-  int kMinTreeSize = 10;
-  int kNumOfIters = 100;
+  int kMaxTreeSize = 10;
+  int kMinTreeSize = 5;
+  int kNumOfIters = 10;
+
+  for (int depth = 2; depth <= 8; ++depth) {
+    int n = (1 << (depth + 1)) - 1;
+    vector<int> turns(n, -1);
+    turns[0] = 0;
+    vector<pair<int, int>> edges;
+    for (int v = 1; v < (1 << depth); ++v) {
+      edges.emplace_back(v - 1, (v << 1) - 1);
+      edges.emplace_back(v - 1, (v << 1));
+
+      if (v < (1 << (depth - 1))) {
+        turns[(v << 1) - 1] = (turns[v - 1] ^ 1);
+        turns[(v << 1)] = (turns[v - 1] ^ 1);
+      }
+    }
+    NashDigraph G(turns, 2, 0);
+    for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
+      G.AddEmptyEdge(edges[edge_idx].first, edges[edge_idx].second, edge_idx);
+    }
+    G.Print(false);
+    auto solver_params = SolverParameters{.are_pay_costs_positive = true,
+                                          .is_special_six_cycle_len_graph = false,
+                                          .left_path_len_bound = 2,
+                                          .right_path_len_bound = 3,
+                                          .cycle_size = 6,
+                                          .num_of_edges_to_cycle_bounds = {{0, 2}, {0, 2}, {0, 2}},
+                                          .offset_filename = "offset.txt",
+                                          .should_shuffle_graphs = true,
+                                          .need_to_remove_one_strategy = true};
+    G.Preprocess(solver_params);
+    G.CalcImprovementsTable(solver_params);
+    // G.Print(false);
+    assert(G.SolveTwoPlayersCosts(solver_params));
+  }
+  /*
   for (int it = 0; it < kNumOfIters; ++it) {
     int tree_size = GetRandomInt(kMinTreeSize, kMaxTreeSize);
     vector<int> parent(tree_size);
@@ -2018,8 +2642,10 @@ void CheckTreeTests() {
                                           .need_to_remove_one_strategy = true};
     G.Preprocess(solver_params);
     G.CalcImprovementsTable(solver_params);
+    G.Print(false);
     assert(G.SolveTwoPlayersCosts(solver_params));
   }
+  */
 }
 
 void CheckNegativeCostsTests() {
@@ -2085,6 +2711,8 @@ void TestIsomoprhicChecker() {
 
 int main() {
   LPSolver::LaunchPython();
+
+  // CheckTreeTests();
   // CheckNegativeCostsTests();
   // CheckTreeTests();
   // NashDigraph G("input.txt", false);
@@ -2140,16 +2768,18 @@ int main() {
                                          .left_path_len_bound = 3,
                                          .right_path_len_bound = 3,
                                          .cycle_size = 4,
-                                         .num_of_edges_to_cycle_bounds = {{4, 4}, {0, 4}, {2, 3}},
+                                         .num_of_edges_to_cycle_bounds = {{4, 4}, {0, 4}, {0, 4}},
                                          .offset_filename = "offset.txt",
-                                         .should_shuffle_graphs = true});
+                                         .should_shuffle_graphs = true,
+                                         .need_to_remove_one_strategy = false});
   if (res) {
     cout << "VICTORY!" << endl;
   }
 
   // TestIsomoprhicChecker();
 
-  // cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset - 1732
+  // cout << TryToSolve(2, 3, 4, {{0, 2}, {0, 2}, {0, 0}, {0, 2}, {0, 0}}, "offset.txt", true) << endl; //offset -
+  // 1732
   // // 0.991 930
   // 2250 - for cycle_size = 3
   // 320 for {3, 3, 3} and cycle_size = 6
