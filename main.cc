@@ -239,6 +239,49 @@ class LPSolver {
     return sol_pair.first;
   }
 
+  bool IsSubsetOf(const LPSolver& rhs) const {
+    set<vector<int>> ineqs;
+
+    for (size_t ineq_idx = 0; ineq_idx < rhs.ineqs_.size(); ++ineq_idx) {
+      auto tmp = rhs.ineqs_[ineq_idx];
+      tmp.emplace_back(rhs.bounds_[ineq_idx]);
+      ineqs.insert(tmp);
+    }
+
+    for (size_t ineq_idx = 0; ineq_idx < ineqs_.size(); ++ineq_idx) {
+      auto tmp = ineqs_[ineq_idx];
+      tmp.emplace_back(bounds_[ineq_idx]);
+      if (ineqs.count(tmp) == 0) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool operator==(const LPSolver& rhs) const {
+    bool res = num_of_variables_ == rhs.num_of_variables_;
+
+    if (!res) {
+      return false;
+    }
+
+    set<pair<vector<int>, int>> sys_lhs, sys_rhs;
+    for (size_t i = 0; i < bounds_.size(); ++i) {
+      sys_lhs.insert(make_pair(ineqs_[i], bounds_[i]));
+    }
+
+    for (size_t i = 0; i < rhs.bounds_.size(); ++i) {
+      sys_rhs.insert(make_pair(rhs.ineqs_[i], rhs.bounds_[i]));
+    }
+
+    return sys_lhs == sys_rhs;
+  }
+
+  bool operator!=(const LPSolver& rhs) const {
+    return !(*this == rhs);
+  }
+
  private:
   static PyObject* feasibility_func_;
   static PyObject* sol_func_;
@@ -316,6 +359,7 @@ struct SolverParameters {
   std::string offset_filename;       // name of file, where last checked cycle id would be stored
   bool should_shuffle_graphs;        // would shuffle order of graphs to check, if true
   bool need_to_remove_one_strategy;  // for test purposes
+  bool is_une_free_case;             // true, if we want to find sample without uniform Nash equilibirium
 };
 
 struct Path {
@@ -862,6 +906,16 @@ class NashDigraph {
     return res;
   }
 
+  void SetStartVertex(int v) {
+    start_vertex_ = v;
+  }
+
+  void UpdateRowColClassesByStart() {
+    row_classes_by_start_.emplace_back(row_classes_);
+    col_classes_by_start_.emplace_back(col_classes_);
+    lin_funcs_by_start_.emplace_back(GetLinearFuncsByCell());
+  }
+
   vector<int> GetTurns() const {
     return turns_;
   }
@@ -1078,88 +1132,6 @@ class NashDigraph {
         }
       }
     }
-
-    /*
-    PathCollector path_collector(GetTurns().size());
-    path_collector.CalcAllPathways(GetAdjacentMatrix());
-    cerr << path_collector.GetPathwaysCnt(start_vertex_, 0) << endl;
-    exit(0);
-
-    auto half_cycles = path_collector.GetAllHalfCycles(GetTurns());
-
-    half_cycles_cx_ = half_cycles.first;
-    half_cycles_cy_ = half_cycles.second;
-
-    best_choice_hcycles_x_ = vector<vector<vector<HalfCycleVar>>>(n, vector<vector<HalfCycleVar>>(m));
-    best_choice_hcycles_y_ = vector<vector<vector<HalfCycleVar>>>(n, vector<vector<HalfCycleVar>>(m));
-
-    for (int cx = 0; cx < n; ++cx) {
-      for (int cy = 0; cy < m; ++cy) {
-        if (!can_improve_row[cx][cy]) {
-          continue;
-        }
-        for (int wy : row_classes_[cx]) {
-          const LinearFunc& plus_path = linear_funcs_by_cell[cx][cy];
-          const LinearFunc& minus_path = linear_funcs_by_cell[cx][wy];
-          if (plus_path == minus_path) {
-            continue;
-          }
-          vector<HalfCycle> decomposition = BuildHalfCycleDecomposition(minus_path, plus_path);
-          for (const HalfCycle& cycle : decomposition) {
-            int found_idx = -1;
-            for (size_t cycle_idx = 0; cycle_idx < half_cycles_cy_.size(); ++cycle_idx) {
-              const HalfCycle& cm = half_cycles_cy_[cycle_idx];
-              cm.Validate(turns_);
-              if (cm == cycle) {
-                found_idx = cycle_idx;
-                break;
-              }
-            }
-            assert(found_idx >= 0);
-            int sign = 1;
-            if (cycle.code == half_cycles_cy_[found_idx].code) {
-              sign = 0;
-            }
-            best_choice_hcycles_y_[cx][cy].emplace_back(HalfCycleVar{.index = found_idx, .sign = sign});
-          }
-        }
-      }
-    }
-
-    for (int cy = 0; cy < m; ++cy) {
-      for (int cx = 0; cx < n; ++cx) {
-        if (!can_improve_col[cx][cy]) {
-          continue;
-        }
-        for (int wx : col_classes_[cy]) {
-          const LinearFunc& plus_path = linear_funcs_by_cell[cx][cy];
-          const LinearFunc& minus_path = linear_funcs_by_cell[wx][cy];
-          if (plus_path == minus_path) {
-            continue;
-          }
-          vector<HalfCycle> decomposition = BuildHalfCycleDecomposition(minus_path, plus_path);
-          for (const HalfCycle& cycle : decomposition) {
-            int found_idx = -1;
-            for (size_t cycle_idx = 0; cycle_idx < half_cycles_cx_.size(); ++cycle_idx) {
-              const HalfCycle& cm = half_cycles_cx_[cycle_idx];
-              cm.Validate(turns_);
-              if (cm == cycle) {
-                found_idx = cycle_idx;
-                break;
-              }
-            }
-            assert(found_idx >= 0);
-            int sign = 1;
-            if (cycle.code == half_cycles_cx_[found_idx].code) {
-              sign = 0;
-            }
-            best_choice_hcycles_x_[cx][cy].emplace_back(HalfCycleVar{.index = found_idx, .sign = sign});
-          }
-        }
-      }
-    }
-    exit(0);
-    */
   }
 
   void Print(bool with_costs) {
@@ -1349,9 +1321,9 @@ class NashDigraph {
         vector<size_t> all_player_strategy(turns_.size());
         ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][i], 0, &all_player_strategy);
         ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][j], 1, &all_player_strategy);
-        bool is_pos_in_ne = IsStrategyNE(all_player_strategy);
+        bool is_pos_in_ne = IsStrategyNE(all_player_strategy, start_vertex_);
         if (best_cells_cover_matrix_[i][j]) {
-          assert(!is_pos_in_ne);
+          // assert(!is_pos_in_ne);
         }
         num_of_ne += is_pos_in_ne;
       }
@@ -1362,7 +1334,6 @@ class NashDigraph {
   }
 
   int CountNumOfNE() {
-    auto lin_funcs = GetLinearFuncsByCell();
     size_t n = turns_.size();
     vector<int> num_of_strategies_limits(num_of_players_);
     for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
@@ -1380,17 +1351,14 @@ class NashDigraph {
           all_possible_players_strategies_[player_idx][strategy_for_cur_player_to_use_idx];
         ApplyPlayerStrategyToGlobalOne(cur_player_strategy, player_idx, &all_players_strategy);
       }
-      bool is_strategy_ne = IsStrategyNE(all_players_strategy);
-      if (is_strategy_ne) {
-        for (int v = 0; v < n; ++v) {
-          if (turns_[v] == -1) {
-            continue;
-          }
-          int edge_idx = all_players_strategy[v];
-          cout << v << " " << edges_[v][edge_idx].finish << endl;
+      bool is_une = true;
+      for (int v = 0; v < n; ++v) {
+        if (turns_[v] == -1) {
+          continue;
         }
+        is_une &= IsStrategyNE(all_players_strategy, v);
       }
-      num_of_corteges_in_ne += is_strategy_ne;
+      num_of_corteges_in_ne += is_une;
     }
     // cout << "Num of corteges in NE: " << num_of_corteges_in_ne << endl;
     assert(total_num_of_corteges != 0);
@@ -1398,18 +1366,18 @@ class NashDigraph {
   }
 
   // strategy[i] is index of edge for vertex i, so, strategy[i] in [0; edges_[i].size());
-  vector<int> CalcPlayersTotalSums(const vector<size_t>& strategy) {
-    return CalcPlayersTotalSums(strategy, start_vertex_, false);
+  vector<int> CalcPlayersTotalSums(const vector<size_t>& strategy, int start_vertex) {
+    return CalcPlayersTotalSums(strategy, start_vertex, false);
   }
 
-  bool IsStrategyNE(const vector<size_t>& strategy) {
-    vector<int> total_costs = CalcPlayersTotalSums(strategy);
+  bool IsStrategyNE(const vector<size_t>& strategy, int start_vertex) {
+    vector<int> total_costs = CalcPlayersTotalSums(strategy, start_vertex);
     size_t n = strategy.size();
     for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
       vector<size_t> all_players_strategy = strategy;
       for (const vector<int>& changed_strategy : all_possible_players_strategies_[player_idx]) {
         ApplyPlayerStrategyToGlobalOne(changed_strategy, player_idx, &all_players_strategy);
-        vector<int> new_player_total_sums = CalcPlayersTotalSums(all_players_strategy);
+        vector<int> new_player_total_sums = CalcPlayersTotalSums(all_players_strategy, start_vertex);
         // player 'player_idx' can improve their strategy, it's not NE
         if (new_player_total_sums[player_idx] < total_costs[player_idx]) {
           return false;
@@ -1459,7 +1427,7 @@ class NashDigraph {
   bool AddInequality(const LinearFunc& old_func,
                      const LinearFunc& new_func,
                      const SolverParameters& solver_params,
-                     PathPosets* path_posets) {
+                     LPSolver* lp_solver) {
     if (old_func.IsCycle() || new_func.IsCycle()) {
       if (solver_params.are_pay_costs_positive) {
         if (old_func.IsCycle()) {
@@ -1470,9 +1438,22 @@ class NashDigraph {
         }
         return false;
       }
+      if (old_func.IsCycle()) {
+        lp_solver->PushInequality(old_func.GetVectorizedCycle(num_of_edges_, -1), -1);  // c > 0
+      }
+      if (new_func.IsCycle()) {
+        lp_solver->PushInequality(new_func.GetVectorizedCycle(num_of_edges_, 1), -1);  // c < 0
+      }
       return true;
     }
-    return path_posets->AddBlock(old_func, new_func);
+    vector<int> ineq(num_of_edges_);
+    for (int edge_idx : new_func.acyclic_part) {
+      ineq[edge_idx] += 1;
+    }
+    for (int edge_idx : old_func.acyclic_part) {
+      ineq[edge_idx] -= 1;
+    }
+    return lp_solver->PushInequality(ineq, -1);
   }
 
   void UpdateMH(int player, int64_t edges_mask, int delta) {
@@ -1514,25 +1495,27 @@ class NashDigraph {
                      LPSolver* lp_y) {
     int n = is_cell_used->size();
     // finding cell to improve for the first player
-    for (int tx : col_classes_[cy]) {
+    for (int tx : col_classes_by_start_[start_vertex_][cy]) {
       int64_t edges_mask = linear_funcs_by_cell[tx][cy].edges_mask;
+      /*
       if (!CanAddMH(0, edges_mask)) {
         continue;
       }
-      size_t old_posets_size = path_posets_x_.Size();
+      */
+      size_t old_lp_size = lp_x->Size();
       if (linear_funcs_by_cell[tx][cy] == linear_funcs_by_cell[cx][cy]) {
         continue;
       }
       const LinearFunc& best_linear_func = linear_funcs_by_cell[tx][cy];
       bool can_add_ineqs = true;
-      for (int func_idx : col_classes_[cy]) {
+      for (int func_idx : col_classes_by_start_[start_vertex_][cy]) {
         if (func_idx == tx) {
           continue;
         }
-        can_add_ineqs &= AddInequality(
-          linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, &path_posets_x_);
+        can_add_ineqs &=
+          AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, lp_x);
       }
-      if (can_add_ineqs) {
+      if (can_add_ineqs && lp_x->IsFeasible()) {
         vector<int> colored_cells;
         for (int wx = 0; wx < n; ++wx) {
           if (linear_funcs_by_cell[wx][cy] == linear_funcs_by_cell[tx][cy]) {
@@ -1554,9 +1537,8 @@ class NashDigraph {
           (*is_cell_used)[colored_cell][cy] = 0;
         }
       }
-
-      while (path_posets_x_.Size() != old_posets_size) {
-        path_posets_x_.PopBlock();
+      while (lp_x->Size() != old_lp_size) {
+        lp_x->PopInequality();
       }
     }
     return false;
@@ -1571,25 +1553,27 @@ class NashDigraph {
                       LPSolver* lp_y) {
     int m = (*is_cell_used)[0].size();
     // finding cell to improve for the second player
-    for (int ty : row_classes_[cx]) {
+    for (int ty : row_classes_by_start_[start_vertex_][cx]) {
       int64_t edges_mask = linear_funcs_by_cell[cx][ty].edges_mask;
+      /*
       if (!CanAddMH(1, edges_mask)) {
         continue;
       }
-      size_t old_posets_size = path_posets_y_.Size();
+      */
+      size_t old_lp_size = lp_y->Size();
       if (linear_funcs_by_cell[cx][ty] == linear_funcs_by_cell[cx][cy]) {
         continue;
       }
       const LinearFunc& best_linear_func = linear_funcs_by_cell[cx][ty];
       bool can_add_ineqs = true;
-      for (int func_idx : row_classes_[cx]) {
+      for (int func_idx : row_classes_by_start_[start_vertex_][cx]) {
         if (func_idx == ty) {
           continue;
         }
-        can_add_ineqs &= AddInequality(
-          linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, &path_posets_y_);
+        can_add_ineqs &=
+          AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, lp_y);
       }
-      if (can_add_ineqs) {
+      if (can_add_ineqs && lp_y->IsFeasible()) {
         vector<int> colored_cells;
         for (int wy = 0; wy < m; ++wy) {
           if (linear_funcs_by_cell[cx][wy] == linear_funcs_by_cell[cx][ty]) {
@@ -1611,18 +1595,18 @@ class NashDigraph {
           (*is_cell_used)[cx][colored_cell] = 0;
         }
       }
-      while (path_posets_y_.Size() != old_posets_size) {
-        path_posets_y_.PopBlock();
+      while (lp_y->Size() != old_lp_size) {
+        lp_y->PopInequality();
       }
     }
     return false;
   }
 
-  bool SolveTwoPlayersCostsRec(const vector<vector<LinearFunc>>& linear_funcs_by_cell,
+  bool SolveTwoPlayersCostsRec(const vector<vector<LinearFunc>>& lin_funcs_by_cell,
                                const SolverParameters& solver_params,
                                int cx,
                                int cy,
-                               int direction,  // -1 for first cell, 0 - GoFirstPlayer, 1 - GoSecondPlayer
+                               int direction,
                                vector<vector<int>>* is_cell_used,
                                LPSolver* lp_x,
                                LPSolver* lp_y) {
@@ -1631,39 +1615,60 @@ class NashDigraph {
     assert(cx < n);
     assert(cy < m);
     if ((*is_cell_used)[cx][cy]) {
-      int wx, wy, max_num_of_fails = -1;
+      int wx, wy = -1;
       int num_of_used_cells = 0;
       for (int tx = 0; tx < n; ++tx) {
         for (int ty = 0; ty < m; ++ty) {
           if (!(*is_cell_used)[tx][ty]) {
-            if (num_of_fails_by_cell_[tx][ty] > max_num_of_fails) {
-              max_num_of_fails = num_of_fails_by_cell_[tx][ty];
-              wx = tx;
-              wy = ty;
-            }
+            wx = tx;
+            wy = ty;
           } else {
             num_of_used_cells++;
           }
         }
       }
-      if (max_num_of_fails == -1) {
-        return true;
-      }
       double sat_percentage_ = double(num_of_used_cells) / (n * m);
       // cerr << "Sat percentage: " << sat_percentage_ << std::endl;
       if (sat_percentage_ > ineq_sat_percentage_) {
+        cerr << sat_percentage_ << endl;
         // cerr << "Updated sat percentage: " << sat_percentage_ << std::endl;
         ineq_sat_percentage_ = sat_percentage_;
         best_solver_first_player_ = *lp_x;
         best_solver_second_player_ = *lp_y;
         best_cells_cover_matrix_ = *is_cell_used;
       }
-      return SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, wx, wy, -1, is_cell_used, lp_x, lp_y);
+      if (wy == -1) {
+        bool is_new = true;
+        for (const auto& P : iso_orders) {
+          if (P.first.IsSubsetOf(*lp_x) && P.second.IsSubsetOf(*lp_y)) {
+            is_new = false;
+            break;
+          }
+        }
+        if (is_new) {
+          glob_ret_res++;
+          lp_x->PrintIneqs();
+          lp_y->PrintIneqs();
+          cerr << glob_ret_res << endl;
+          iso_orders.emplace_back(*lp_x, *lp_y);
+        }
+        return false;
+      }
+      return SolveTwoPlayersCostsRec(lin_funcs_by_cell, solver_params, wx, wy, -1, is_cell_used, lp_x, lp_y);
     }
-    (*is_cell_used)[cx][cy] = 1;
-    // randomizing branch's order
 
-    if (direction == -1) {
+    // UNE-start
+    for (size_t start_v = 0; start_v < turns_.size(); ++start_v) {
+      if (turns_[start_v] == -1) {
+        continue;
+      }
+
+      start_vertex_ = start_v;
+
+      const auto& linear_funcs_by_cell = lin_funcs_by_start_[start_v];
+
+      (*is_cell_used)[cx][cy] = 1;
+
       bool res = GoFirstPlayer(linear_funcs_by_cell, solver_params, cx, cy, is_cell_used, lp_x, lp_y);
       if (res) {
         return true;
@@ -1672,27 +1677,11 @@ class NashDigraph {
       if (res) {
         return true;
       }
+
       num_of_fails_by_cell_[cx][cy]++;
       (*is_cell_used)[cx][cy] = 0;
-      return false;
     }
-
-    if (direction == 0) {
-      bool res = GoFirstPlayer(linear_funcs_by_cell, solver_params, cx, cy, is_cell_used, lp_x, lp_y);
-      if (res) {
-        return true;
-      }
-      num_of_fails_by_cell_[cx][cy]++;
-      (*is_cell_used)[cx][cy] = 0;
-      return false;
-    }
-
-    bool res = GoSecondPlayer(linear_funcs_by_cell, solver_params, cx, cy, is_cell_used, lp_x, lp_y);
-    if (res) {
-      return true;
-    }
-    num_of_fails_by_cell_[cx][cy]++;
-    (*is_cell_used)[cx][cy] = 0;
+    // UNE-end
     return false;
   }
 
@@ -1763,7 +1752,7 @@ class NashDigraph {
     path_posets_x_ = PathPosets(flatten_lin_funcs, num_of_edges_);
     path_posets_y_ = path_posets_x_;
 
-    vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
+    vector<vector<int>> is_cell_used(n, vector<int>(m));
     int sx = -1, sy = -1;
 
     MH_cov[1] = vector<int>(m, 0);
@@ -1786,8 +1775,7 @@ class NashDigraph {
     LPSolver lp_x = ConfigureBaseLP(0, solver_params);
     LPSolver lp_y = ConfigureBaseLP(1, solver_params);
 
-    return SolveTwoPlayersCostsRec(
-      linear_funcs_by_cell, solver_params, sx, sy, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
+    return SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, sx, sy, -1, &is_cell_used, &lp_x, &lp_y);
   }
 
   void Dfs(int cur_vertex, vector<int>* is_vertex_visited) {
@@ -2133,19 +2121,29 @@ class NashDigraph {
       vector<size_t> all_players_strategy(turns_.size());  // 0 will remain for terminals
       ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[0][i], 0, &all_players_strategy);
       ApplyPlayerStrategyToGlobalOne(all_possible_players_strategies_[1][j], 1, &all_players_strategy);
-      if (IsStrategyNE(all_players_strategy)) {
+      if (IsStrategyNE(all_players_strategy, start_vertex_)) {
         res.emplace_back(i, j);
       }
     }
     return res;
   }
 
+  int GetGlobalRetRes() {
+    return glob_ret_res;
+  }
+
  private:
+  int glob_ret_res = 0;
+
+  vector<pair<LPSolver, LPSolver>> iso_orders;
+
   struct HalfCycleVar {
     int player_num;  // == 0 => 'half_cycles_cx_', == 1 => 'half_cycles_cy_'
     int index;       // index in 'half_cycles_cx_' or 'half_cycles_cy_'
     int sign;        // 0, 1
   };
+
+  vector<vector<int>> is_used_by_v[6];  // for une-free search
 
   PathPosets path_posets_x_, path_posets_y_;
 
@@ -2161,6 +2159,9 @@ class NashDigraph {
   vector<vector<int>> num_of_fails_by_cell_;
   vector<vector<int>> row_classes_;
   vector<vector<int>> col_classes_;
+
+  vector<vector<vector<int>>> row_classes_by_start_, col_classes_by_start_;
+  vector<vector<vector<LinearFunc>>> lin_funcs_by_start_;
 
   vector<int> turns_;  // each value is in [-1; num_of_players), where -1 denotes terminal vertex
   vector<vector<Edge>> edges_;
@@ -2403,12 +2404,24 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
 bool CheckNashDigraphSample(const SolverParameters& solver_params, double* max_ineq_rate, NashDigraph* G) {
   G->Print(false);
   G->Preprocess(solver_params);
-  G->CalcImprovementsTable(solver_params);
+  if (solver_params.is_une_free_case) {
+    for (size_t v = 0; v < (G->GetTurns()).size(); ++v) {
+      G->SetStartVertex(v);
+      G->CalcImprovementsTable(solver_params);
+      G->UpdateRowColClassesByStart();
+    }
+  } else {
+    G->CalcImprovementsTable(solver_params);
+  }
 
   bool g_res = G->SolveTwoPlayersCosts(solver_params);
-  // G->CheckCorrectness();
+  G->CheckCorrectness();
+  G->Print(true);
+
   double cur_ineq_sat_percentage = G->GetIneqSatPercentage();
   *max_ineq_rate = max(*max_ineq_rate, cur_ineq_sat_percentage);
+
+  cout << "Global ret res: " << G->GetGlobalRetRes() << endl;
   return g_res;
 }
 
@@ -2740,13 +2753,6 @@ int main() {
       cerr << it << endl;
     }
     */
-  /*
- NashDigraph G("input.txt", true);
- auto f1 = G.CheckHypo(0);
- auto f2 = G.CheckHypo(1);
-
- cout << IsIntersection(f1, f2) << endl;
- */
 
   // G.CountNumOfNE();
 
@@ -2762,6 +2768,24 @@ int main() {
   // CheckTreeTests();
   // CheckNegativeCostsTests();
 
+  auto solver_params = SolverParameters{.are_pay_costs_positive = true,
+                                        .is_special_six_cycle_len_graph = false,
+                                        .left_path_len_bound = 0,
+                                        .right_path_len_bound = 0,
+                                        .cycle_size = 6,
+                                        .num_of_edges_to_cycle_bounds = {},
+                                        .offset_filename = "offset.txt",
+                                        .should_shuffle_graphs = true,
+                                        .need_to_remove_one_strategy = false,
+                                        .is_une_free_case = true};
+
+  NashDigraph G("input.txt", false);
+  // cout << G.CountNumOfNE() << endl;
+
+  double xyz = 0.0;
+  cout << CheckNashDigraphSample(solver_params, &xyz, &G) << endl;
+
+  /*
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = false,
                                          .left_path_len_bound = 3,
@@ -2774,6 +2798,7 @@ int main() {
   if (res) {
     cout << "VICTORY!" << endl;
   }
+  */
 
   // TestIsomoprhicChecker();
 

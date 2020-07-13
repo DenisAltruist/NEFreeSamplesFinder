@@ -3,7 +3,7 @@ import time
 import numpy as np
 
 def solve(A, b):
-  c = np.zeros(len(A[0])).tolist()
+  c = np.ones(len(A[0])).tolist()
   res = linprog(c=c, A_ub=A, b_ub=b, bounds=(None, None), method='interior-point')
   return res['success'], np.array(res['x']).tolist()
   
