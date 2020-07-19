@@ -1537,7 +1537,7 @@ class NashDigraph {
     int m = all_possible_players_strategies_[1].size();
     ineq_sat_percentage_ = -1.0;
     {
-      std::unique_lock lock(*solver_params.log_mutex);
+      std::unique_lock<std::mutex> lock(*solver_params.log_mutex);
       cout << "Num of strategies for players: " << n << " " << m << endl;
     }
     if (n == 0 || m == 0) {
@@ -2205,12 +2205,10 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   return true;
 }
 
-bool CheckNashDigraphSample(const SolverParameters& solver_params,
-                            size_t job_id,
-                            double* max_ineq_rate,
-                            NashDigraph* G) {
+bool CheckNashDigraphSample(
+  int some_id, const SolverParameters& solver_params, size_t job_id, double* max_ineq_rate, NashDigraph* G) {
   {
-    std::unique_lock lock(*solver_params.log_mutex);
+    std::unique_lock<std::mutex> lock(*solver_params.log_mutex);
     cout << "Starting job ID: " << job_id << endl;
     G->Print(false);
   }
@@ -2222,7 +2220,7 @@ bool CheckNashDigraphSample(const SolverParameters& solver_params,
   double cur_ineq_sat_percentage = G->GetIneqSatPercentage();
   *max_ineq_rate = max(*max_ineq_rate, cur_ineq_sat_percentage);
   {
-    std::unique_lock lock(*solver_params.log_mutex);
+    std::unique_lock<std::mutex> lock(*solver_params.log_mutex);
     cout << "Job ID: " << job_id << " is done" << endl;
   }
   return g_res;
@@ -2300,13 +2298,12 @@ bool TryToSolve(const SolverParameters& solver_params) {
   size_t num_of_threads = std::thread::hardware_concurrency();
   cerr << "Num of threads: " << num_of_threads << endl;
 
-  ThreadPool thread_pool(num_of_threads);
+  ctpl::thread_pool pool(num_of_threads);
 
   vector<future<bool>> jobs;
   for (size_t job_id = 0; job_id < graphs_to_check.size(); ++job_id) {
     NashDigraph& nd = graphs_to_check[job_id];
-    jobs.emplace_back(
-      thread_pool.enqueue(CheckNashDigraphSample, std::cref(solver_params), job_id, &max_ineq_rate, &nd));
+    jobs.emplace_back(pool.push(CheckNashDigraphSample, std::cref(solver_params), job_id, &max_ineq_rate, &nd));
   }
 
   cerr << "Total num of graphs: " << total_num_of_graphs << endl;
