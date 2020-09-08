@@ -1,8 +1,9 @@
 // g++ main.cc -O3 -o main -I/usr/include/python3.6 -lpython3.6m
-// g++ main.cc thread_pool.cc -O3 -std=c++17 -o main -lpthread -I/usr/include/python3.6 -lpython3.6m
+// g++ main.cc -O3 -std=c++17 -o main -lpthread -I/usr/include/python3.6 -lpython3.6m
 
 #include <Python.h>
 #include <bits/stdc++.h>
+#include <condition_variable>
 #include "thread_pool.h"
 
 using namespace std;
@@ -2116,7 +2117,6 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int nghbr_mask = choice_to_build_path[vertex_in_path];
 
-    /*
     if (vertex_in_path <= 1) {  // a -> b, b -> e prefix
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
@@ -2124,8 +2124,8 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
         return false;
       }
     }
-    */
 
+    /*
     if (vertex_in_path == 1) {  // a -> b, a -> e case
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
@@ -2133,6 +2133,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
         return false;
       }
     }
+    */
 
     for (int next_vertex_num = vertex_in_path + 1; next_vertex_num < path_size; ++next_vertex_num) {
       int bit_pos = path_size - next_vertex_num - 1;
@@ -2156,11 +2157,13 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
     return false;
   }
   // Edges from path to cycle
+  int num_of_outs = 0;
   vector<int> set_of_cycle_outs(cycle_size, 0);
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int cycle_mask = choice_to_connect_with_cycle[vertex_in_path];
     for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
       int is_connected = (cycle_mask >> vertex_in_cycle) & 1;
+      num_of_outs += is_connected;
       if (is_connected) {
         if (vertex_in_path != 0) {
           set_of_cycle_outs[vertex_in_cycle]++;
@@ -2168,6 +2171,9 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
         AddEdge(cycle_size + 1 + vertex_in_path, vertex_in_cycle + 1, &edges);
       }
     }
+  }
+  if (num_of_outs > 5) {
+    return false;
   }
   /*
   int num_of_intersections_on_cycle_outs = 0;
@@ -2189,15 +2195,27 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
 
   // Edges on cycle
 
+  // New kind of cycle
   for (int vertex_in_cycle = 0; vertex_in_cycle < cycle_size; ++vertex_in_cycle) {
     int next_vertex_in_cycle = (vertex_in_cycle + 1) % cycle_size;
     AddEdge(vertex_in_cycle + 1, next_vertex_in_cycle + 1, &edges);
     AddEdge(vertex_in_cycle + 1, 0, &edges);
+    /*
+    if (vertex_in_cycle != 3) {
+      AddEdge(vertex_in_cycle + 1, 0, &edges);
+    }
+    */
   }
+
+  // AddEdge(4, 2, &edges);
+
   *res = NashDigraph(turns, 2, cycle_size + 1);
+
   for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
     res->AddEmptyEdge(edges[edge_idx].first, edges[edge_idx].second, edge_idx);
   }
+
+  // res->Print(false);
   if (!res->AreAllVerticesAccessibleFromStart() || !res->HasOnlyOneTerminal() ||
       !res->AreAllVerticesHasAtLeastTwoMoves()) {
     return false;
@@ -2205,17 +2223,43 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   return true;
 }
 
-bool CheckNashDigraphSample(
-  int some_id, const SolverParameters& solver_params, size_t job_id, double* max_ineq_rate, NashDigraph* G) {
+struct ThreadQueue {
+  std::mutex m;
+  std::condition_variable cv;
+  std::queue<int> q;
+
+  void PushRes(int x) {
+    std::unique_lock<std::mutex> lock(m);
+    q.push(x);
+  }
+
+  void Notify() {
+    cv.notify_one();
+  }
+
+  void Pop(int* x) {
+    std::unique_lock<std::mutex> lock(m);
+    cv.wait(lock, [&] { return !q.empty(); });
+    *x = q.front();
+    q.pop();
+  }
+};
+
+void CheckNashDigraphSample(int some_id,
+                            const SolverParameters& solver_params,
+                            size_t job_id,
+                            double* max_ineq_rate,
+                            NashDigraph* G,
+                            ThreadQueue* tq) {
   {
     std::unique_lock<std::mutex> lock(*solver_params.log_mutex);
     cout << "Starting job ID: " << job_id << endl;
     G->Print(false);
   }
+  bool g_res;
   G->Preprocess(solver_params);
   G->CalcImprovementsTable(solver_params);
-
-  bool g_res = G->SolveTwoPlayersCosts(solver_params);
+  g_res = G->SolveTwoPlayersCosts(solver_params);
   // G->CheckCorrectness();
   double cur_ineq_sat_percentage = G->GetIneqSatPercentage();
   *max_ineq_rate = max(*max_ineq_rate, cur_ineq_sat_percentage);
@@ -2223,7 +2267,9 @@ bool CheckNashDigraphSample(
     std::unique_lock<std::mutex> lock(*solver_params.log_mutex);
     cout << "Job ID: " << job_id << " is done" << endl;
   }
-  return g_res;
+  tq->PushRes(g_res);
+  tq->Notify();
+  return;
 }
 
 bool TryToSolve(const SolverParameters& solver_params) {
@@ -2250,6 +2296,8 @@ bool TryToSolve(const SolverParameters& solver_params) {
 
   vector<NashDigraph> graphs_to_check;
 
+  const int kMaxTotalNumOfClasses = 2000;
+
   for (int path_size = solver_params.left_path_len_bound; path_size <= solver_params.right_path_len_bound;
        ++path_size) {
     cerr << "Start generating something new" << endl;
@@ -2269,7 +2317,13 @@ bool TryToSolve(const SolverParameters& solver_params) {
 
     for (size_t build_path_choice_idx = 0; build_path_choice_idx < choices_to_build_path.size();
          ++build_path_choice_idx) {
+      if (total_num_of_classes > kMaxTotalNumOfClasses) {
+        break;
+      }
       for (size_t cycle_choice_idx = 0; cycle_choice_idx < choices_to_connect_with_cycle.size(); ++cycle_choice_idx) {
+        if (total_num_of_classes > kMaxTotalNumOfClasses) {
+          break;
+        }
         GraphId cur_graph_id{solver_params.cycle_size, path_size, build_path_choice_idx, cycle_choice_idx};
         NashDigraph G;
         bool should_use =
@@ -2298,21 +2352,28 @@ bool TryToSolve(const SolverParameters& solver_params) {
   size_t num_of_threads = std::thread::hardware_concurrency();
   cerr << "Num of threads: " << num_of_threads << endl;
 
+  cerr << "Total num of graphs: " << total_num_of_graphs << endl;
+
   ctpl::thread_pool pool(num_of_threads);
 
-  vector<future<bool>> jobs;
+  vector<future<void>> jobs;
+
+  ThreadQueue tq;
+
   for (size_t job_id = 0; job_id < graphs_to_check.size(); ++job_id) {
     NashDigraph& nd = graphs_to_check[job_id];
-    jobs.emplace_back(pool.push(CheckNashDigraphSample, std::cref(solver_params), job_id, &max_ineq_rate, &nd));
+    jobs.emplace_back(pool.push(CheckNashDigraphSample, std::cref(solver_params), job_id, &max_ineq_rate, &nd, &tq));
   }
 
   cerr << "Total num of graphs: " << total_num_of_graphs << endl;
 
-  for (size_t job_id = 0; job_id < jobs.size(); ++job_id) {
-    future<bool>& job_res = jobs[job_id];
-    bool res = job_res.get();
+  for (int i = 0; i < num_of_threads; ++i) {
+    int res;
+    tq.Pop(&res);
     if (res) {
-      return res;
+      std::cout << "YES!" << std::endl;
+      pool.stop(false);
+      return true;
     }
   }
 
@@ -2380,7 +2441,7 @@ void CheckTreeTests() {
     for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
       G.AddEmptyEdge(edges[edge_idx].first, edges[edge_idx].second, edge_idx);
     }
-    G.Print(false);
+    // G.Print(false);
     auto solver_params = SolverParameters{.are_pay_costs_positive = true,
                                           .is_special_six_cycle_len_graph = false,
                                           .left_path_len_bound = 2,
@@ -2588,8 +2649,8 @@ int main() {
                                          .is_special_six_cycle_len_graph = false,
                                          .left_path_len_bound = 3,
                                          .right_path_len_bound = 3,
-                                         .cycle_size = 4,
-                                         .num_of_edges_to_cycle_bounds = {{4, 4}, {0, 4}, {0, 4}},
+                                         .cycle_size = 6,
+                                         .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 6}, {0, 6}, {0, 6}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true,
                                          .need_to_remove_one_strategy = false,
