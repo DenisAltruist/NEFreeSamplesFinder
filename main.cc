@@ -2367,7 +2367,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
 
   cerr << "Total num of graphs: " << total_num_of_graphs << endl;
 
-  for (int i = 0; i < num_of_threads; ++i) {
+  for (size_t i = 0; i < graphs_to_check.size(); ++i) {
     int res;
     tq.Pop(&res);
     if (res) {
