@@ -827,11 +827,11 @@ class NashDigraph {
 
   // For this constructor edges should be added manually
   NashDigraph(const vector<int>& turns, int num_of_players, size_t start_vertex)
-    : turns_(turns),
-      edges_(vector<vector<Edge>>(turns.size())),
-      start_vertex_(start_vertex),
-      num_of_players_(num_of_players),
-      num_of_edges_(0) {
+      : turns_(turns),
+        edges_(vector<vector<Edge>>(turns.size())),
+        start_vertex_(start_vertex),
+        num_of_players_(num_of_players),
+        num_of_edges_(0) {
   }
 
   void Preprocess(const SolverParameters& solver_params) {
@@ -1170,7 +1170,7 @@ class NashDigraph {
       for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
         size_t strategy_for_cur_player_to_use_idx = strategy_cortege[player_idx];
         const vector<int>& cur_player_strategy =
-          all_possible_players_strategies_[player_idx][strategy_for_cur_player_to_use_idx];
+            all_possible_players_strategies_[player_idx][strategy_for_cur_player_to_use_idx];
         ApplyPlayerStrategyToGlobalOne(cur_player_strategy, player_idx, &all_players_strategy);
       }
       bool is_strategy_ne = IsStrategyNE(all_players_strategy);
@@ -1323,7 +1323,7 @@ class NashDigraph {
           continue;
         }
         can_add_ineqs &= AddInequality(
-          linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, &path_posets_x_);
+            linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, &path_posets_x_);
       }
       if (can_add_ineqs) {
         vector<int> colored_cells;
@@ -1338,7 +1338,7 @@ class NashDigraph {
         }
         UpdateMH(0, edges_mask, 1);
         bool branch_result =
-          SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, tx, cy, 1, is_cell_used, lp_x, lp_y);
+            SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, tx, cy, 1, is_cell_used, lp_x, lp_y);
         if (branch_result) {
           return true;
         }
@@ -1380,7 +1380,7 @@ class NashDigraph {
           continue;
         }
         can_add_ineqs &= AddInequality(
-          linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, &path_posets_y_);
+            linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, &path_posets_y_);
       }
       if (can_add_ineqs) {
         vector<int> colored_cells;
@@ -1395,7 +1395,7 @@ class NashDigraph {
         }
         UpdateMH(1, edges_mask, 1);
         bool branch_result =
-          SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, cx, ty, 0, is_cell_used, lp_x, lp_y);
+            SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, cx, ty, 0, is_cell_used, lp_x, lp_y);
         if (branch_result) {
           return true;
         }
@@ -1583,7 +1583,7 @@ class NashDigraph {
     LPSolver lp_y = ConfigureBaseLP(1, solver_params);
 
     return SolveTwoPlayersCostsRec(
-      linear_funcs_by_cell, solver_params, sx, sy, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
+        linear_funcs_by_cell, solver_params, sx, sy, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
   }
 
   void Dfs(int cur_vertex, vector<int>* is_vertex_visited) {
@@ -1879,12 +1879,12 @@ class NashDigraph {
     };
 
     std::sort(
-      outcomes.begin(), outcomes.end(), [&](const vector<Outcome>& lhs_str, const vector<Outcome>& rhs_str) -> bool {
-        int x;
-        int lhs_mn = calc_mn(lhs_str, &x);
-        int rhs_mn = calc_mn(rhs_str, &x);
-        return lhs_mn < rhs_mn;
-      });
+        outcomes.begin(), outcomes.end(), [&](const vector<Outcome>& lhs_str, const vector<Outcome>& rhs_str) -> bool {
+          int x;
+          int lhs_mn = calc_mn(lhs_str, &x);
+          int rhs_mn = calc_mn(rhs_str, &x);
+          return lhs_mn < rhs_mn;
+        });
 
     auto get_lex_code = [&](int idx) -> vector<int> {
       vector<int> code(num_of_outcomes);
@@ -2165,9 +2165,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
       int is_connected = (cycle_mask >> vertex_in_cycle) & 1;
       num_of_outs += is_connected;
       if (is_connected) {
-        if (vertex_in_path != 0) {
-          set_of_cycle_outs[vertex_in_cycle]++;
-        }
+        set_of_cycle_outs[vertex_in_cycle]++;
         AddEdge(cycle_size + 1 + vertex_in_path, vertex_in_cycle + 1, &edges);
       }
     }
@@ -2175,17 +2173,13 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   if (num_of_outs > 5) {
     return false;
   }
-  /*
-  int num_of_intersections_on_cycle_outs = 0;
   for (int cycle_vertex = 0; cycle_vertex < cycle_size; ++cycle_vertex) {
-    assert(set_of_cycle_outs[cycle_vertex] <= 2);
-    if (set_of_cycle_outs[cycle_vertex] == 2) {
-      num_of_intersections_on_cycle_outs++;
+    if (set_of_cycle_outs[cycle_vertex] > 1) {
+      return false;
     }
   }
-  if (num_of_intersections_on_cycle_outs > 1) {
-    return false;
-  }
+
+  /*
   if (num_of_intersections_on_cycle_outs == 0 && __builtin_popcount(choice_to_connect_with_cycle[0]) <= 2 &&
       __builtin_popcount(choice_to_connect_with_cycle[1] <= 2)) {
     cout << "Got already considered graph. Continue ...";
@@ -2296,14 +2290,14 @@ bool TryToSolve(const SolverParameters& solver_params) {
 
   vector<NashDigraph> graphs_to_check;
 
-  const int kMaxTotalNumOfClasses = 2000;
+  const int kMaxTotalNumOfClasses = 10000;
 
   for (int path_size = solver_params.left_path_len_bound; path_size <= solver_params.right_path_len_bound;
        ++path_size) {
     cerr << "Start generating something new" << endl;
     vector<int> path_to_cycle_edges_ways_limits(path_size, (1 << solver_params.cycle_size));
     choices_to_connect_with_cycle =
-      GenAllPossibleChoicesForMasks(path_to_cycle_edges_ways_limits, solver_params.num_of_edges_to_cycle_bounds);
+        GenAllPossibleChoicesForMasks(path_to_cycle_edges_ways_limits, solver_params.num_of_edges_to_cycle_bounds);
 
     cerr << "All possible cycle outs are generated" << endl;
 
@@ -2327,7 +2321,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
         GraphId cur_graph_id{solver_params.cycle_size, path_size, build_path_choice_idx, cycle_choice_idx};
         NashDigraph G;
         bool should_use =
-          BuildNashDigraphByGraphId(cur_graph_id, choices_to_build_path, choices_to_connect_with_cycle, &G);
+            BuildNashDigraphByGraphId(cur_graph_id, choices_to_build_path, choices_to_connect_with_cycle, &G);
         if (!should_use) {
           continue;
         }
