@@ -1,7 +1,6 @@
 // g++ main.cc -O3 -o main -I/usr/include/python3.6 -lpython3.6m
 // g++ main.cc -O3 -std=c++17 -o main -lpthread -I/usr/include/python3.6 -lpython3.6m
 
-#include <Python.h>
 #include <bits/stdc++.h>
 #include <condition_variable>
 #include "thread_pool.h"
@@ -89,30 +88,9 @@ struct Edge {
 class LPSolver {
  public:
   static void LaunchPython() {
-    Py_Initialize();
-
-    PyRun_SimpleString("import sys");
-    PyRun_SimpleString("import os");
-    PyRun_SimpleString("sys.path.append(os.getcwd())");
-
-    PyObject* p_name = PyUnicode_FromString("lp_solver");
-    CheckPyObjectFailure(p_name);
-
-    PyObject* p_module = PyImport_Import(p_name);
-    CheckPyObjectFailure(p_module);
-
-    PyObject* p_dict = PyModule_GetDict(p_module);
-    CheckPyObjectFailure(p_dict);
-
-    feasibility_func_ = PyDict_GetItemString(p_dict, "is_feasible");
-    CheckPyObjectFailure(feasibility_func_);
-
-    sol_func_ = PyDict_GetItemString(p_dict, "solve");
-    CheckPyObjectFailure(sol_func_);
   }
 
   static void ReleasePython() {
-    Py_Finalize();
   }
 
   LPSolver() = default;
@@ -122,33 +100,7 @@ class LPSolver {
 
   pair<bool, vector<double>> GetSolution() {
     vector<double> res_list;
-    /*
-    const int kNumOfRandomAttempts = 1;
-    for (int it = 0; it < kNumOfRandomAttempts; ++it) {
-      vector<double> trial_sol(num_of_variables_);
-      for (int var_idx = 0; var_idx < num_of_variables_; ++var_idx) {
-        trial_sol[var_idx] = GetRandomInt(1, kEdgeCostLimit);
-      }
-      bool res = CheckSolution(trial_sol);
-      if (res) {
-        return make_pair(true, trial_sol);
-      }
-    }
-    */
-
-    PyObject* res = CallCvxopt(sol_func_);
-    CheckPyObjectFailure(res);
-    PyObject* first_res = PyTuple_GetItem(res, 0);
-    CheckPyObjectFailure(first_res);
-    PyObject* second_res = PyTuple_GetItem(res, 1);
-    CheckPyObjectFailure(second_res);
-    int sol_len = PyObject_Length(second_res);
-    for (int i = 0; i < sol_len; ++i) {
-      PyObject* item = PyList_GetItem(second_res, i);
-      CheckPyObjectFailure(item);
-      res_list.emplace_back(PyFloat_AsDouble(item));
-    }
-    return make_pair(PyLong_AsLong(first_res), res_list);
+    return make_pair(false, vector<double>());
   }
 
   vector<int> GetIntSolution() {
@@ -243,61 +195,11 @@ class LPSolver {
   }
 
  private:
-  static PyObject* feasibility_func_;
-  static PyObject* sol_func_;
-
-  PyObject* CallCvxopt(PyObject* call_function) {
-    PyObject* p_args = PyTuple_New(2);
-
-    assert(!ineqs_.empty());
-    assert(!bounds_.empty());
-
-    PyTuple_SetItem(p_args, 0, PMatrixFromVector(ineqs_, "int"));
-    PyTuple_SetItem(p_args, 1, PListFromVector(bounds_, "int"));
-
-    PyObject* call_result = PyObject_CallObject(call_function, p_args);
-
-    Py_DECREF(p_args);
-
-    CheckPyObjectFailure(call_result);
-    return call_result;
-  }
-
-  static void CheckPyObjectFailure(PyObject* object) {
-    if (object == nullptr) {
-      PyErr_Print();
-      exit(1);
-    }
-  }
-
-  PyObject* PListFromVector(const vector<int>& nums, const string& type) {
-    PyObject* l = PyList_New(nums.size());
-    for (size_t i = 0; i < nums.size(); ++i) {
-      if (type == "double") {
-        PyList_SET_ITEM(l, i, PyFloat_FromDouble(nums[i]));
-      } else {
-        PyList_SET_ITEM(l, i, PyLong_FromLong(nums[i]));
-      }
-    }
-    return l;
-  }
-
-  PyObject* PMatrixFromVector(const vector<vector<int>>& matrix, const string& type) {
-    PyObject* l = PyList_New(matrix.size());
-    for (size_t i = 0; i < matrix.size(); ++i) {
-      PyList_SET_ITEM(l, i, PListFromVector(matrix[i], type));
-    }
-    return l;
-  }
-
   int num_of_variables_;
   vector<int> bounds_;
   vector<vector<int>> ineqs_;
   vector<double> last_sol_;
 };
-
-PyObject* LPSolver::feasibility_func_ = nullptr;
-PyObject* LPSolver::sol_func_ = nullptr;
 
 void PrintVec(const vector<int>& v) {
   for (size_t i = 0; i < v.size(); ++i) {
