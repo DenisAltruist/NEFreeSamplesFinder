@@ -2019,7 +2019,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int nghbr_mask = choice_to_build_path[vertex_in_path];
 
-    if (vertex_in_path <= 1) {  // a -> b, b -> e prefix
+    if (vertex_in_path <= 2) {  // a -> b, b -> e, e -> f prefix
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
       if (!next_bit) {
@@ -2072,7 +2072,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
       }
     }
   }
-  if (num_of_outs > 5) {
+  if (num_of_outs > 3) {
     return false;
   }
   for (int cycle_vertex = 0; cycle_vertex < cycle_size; ++cycle_vertex) {
@@ -2144,20 +2144,20 @@ struct ThreadQueue {
 void CheckNashDigraphSample(int some_id,
                             const SolverParameters& solver_params,
                             size_t job_id,
+                            NashDigraph G,
                             double* max_ineq_rate,
-                            NashDigraph* G,
                             ThreadQueue* tq) {
   {
     std::unique_lock<std::mutex> lock(*solver_params.log_mutex);
     cout << "Starting job ID: " << job_id << endl;
-    G->Print(false);
+    G.Print(false);
   }
   bool g_res;
-  G->Preprocess(solver_params);
-  G->CalcImprovementsTable(solver_params);
-  g_res = G->SolveTwoPlayersCosts(solver_params);
+  G.Preprocess(solver_params);
+  G.CalcImprovementsTable(solver_params);
+  g_res = G.SolveTwoPlayersCosts(solver_params);
   // G->CheckCorrectness();
-  double cur_ineq_sat_percentage = G->GetIneqSatPercentage();
+  double cur_ineq_sat_percentage = G.GetIneqSatPercentage();
   *max_ineq_rate = max(*max_ineq_rate, cur_ineq_sat_percentage);
   {
     std::unique_lock<std::mutex> lock(*solver_params.log_mutex);
@@ -2257,8 +2257,12 @@ bool TryToSolve(const SolverParameters& solver_params) {
   ThreadQueue tq;
 
   for (size_t job_id = 0; job_id < graphs_to_check.size(); ++job_id) {
-    NashDigraph& nd = graphs_to_check[job_id];
-    jobs.emplace_back(pool.push(CheckNashDigraphSample, std::cref(solver_params), job_id, &max_ineq_rate, &nd, &tq));
+    jobs.emplace_back(pool.push(CheckNashDigraphSample,
+                                std::cref(solver_params),
+                                job_id,
+                                std::move(graphs_to_check[job_id]),
+                                &max_ineq_rate,
+                                &tq));
   }
 
   cerr << "Total num of graphs: " << total_num_of_graphs << endl;
@@ -2543,10 +2547,10 @@ int main() {
 
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = false,
-                                         .left_path_len_bound = 3,
-                                         .right_path_len_bound = 3,
+                                         .left_path_len_bound = 4,
+                                         .right_path_len_bound = 4,
                                          .cycle_size = 6,
-                                         .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 6}, {0, 6}, {0, 6}},
+                                         .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 3}, {0, 3}, {0, 3}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true,
                                          .need_to_remove_one_strategy = false,
