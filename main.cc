@@ -1,6 +1,7 @@
 // g++ main.cc -O3 -o main -I/usr/include/python3.6 -lpython3.6m
 // g++ main.cc -O3 -std=c++17 -o main -lpthread -I/usr/include/python3.6 -lpython3.6m
 
+#include <Python.h>
 #include <bits/stdc++.h>
 #include <condition_variable>
 #include "thread_pool.h"
@@ -88,9 +89,30 @@ struct Edge {
 class LPSolver {
  public:
   static void LaunchPython() {
+    Py_Initialize();
+
+    PyRun_SimpleString("import sys");
+    PyRun_SimpleString("import os");
+    PyRun_SimpleString("sys.path.append(os.getcwd())");
+
+    PyObject* p_name = PyUnicode_FromString("lp_solver");
+    CheckPyObjectFailure(p_name);
+
+    PyObject* p_module = PyImport_Import(p_name);
+    CheckPyObjectFailure(p_module);
+
+    PyObject* p_dict = PyModule_GetDict(p_module);
+    CheckPyObjectFailure(p_dict);
+
+    feasibility_func_ = PyDict_GetItemString(p_dict, "is_feasible");
+    CheckPyObjectFailure(feasibility_func_);
+
+    sol_func_ = PyDict_GetItemString(p_dict, "solve");
+    CheckPyObjectFailure(sol_func_);
   }
 
   static void ReleasePython() {
+    Py_Finalize();
   }
 
   LPSolver() = default;
@@ -100,15 +122,39 @@ class LPSolver {
 
   pair<bool, vector<double>> GetSolution() {
     vector<double> res_list;
-    return make_pair(false, vector<double>());
+    /*
+    const int kNumOfRandomAttempts = 1;
+    for (int it = 0; it < kNumOfRandomAttempts; ++it) {
+      vector<double> trial_sol(num_of_variables_);
+      for (int var_idx = 0; var_idx < num_of_variables_; ++var_idx) {
+        trial_sol[var_idx] = GetRandomInt(1, kEdgeCostLimit);
+      }
+      bool res = CheckSolution(trial_sol);
+      if (res) {
+        return make_pair(true, trial_sol);
+      }
+    }
+    */
+
+    PyObject* res = CallCvxopt(sol_func_);
+    CheckPyObjectFailure(res);
+    PyObject* first_res = PyTuple_GetItem(res, 0);
+    CheckPyObjectFailure(first_res);
+    PyObject* second_res = PyTuple_GetItem(res, 1);
+    CheckPyObjectFailure(second_res);
+    int sol_len = PyObject_Length(second_res);
+    for (int i = 0; i < sol_len; ++i) {
+      PyObject* item = PyList_GetItem(second_res, i);
+      CheckPyObjectFailure(item);
+      res_list.emplace_back(PyFloat_AsDouble(item));
+    }
+    return make_pair(PyLong_AsLong(first_res), res_list);
   }
 
   vector<int> GetIntSolution() {
     vector<int> res(num_of_variables_);
     auto sol_pair = GetSolution();
-
     vector<double> reg_sol = sol_pair.second;
-
     assert(sol_pair.first == true);
     for (int mask = 0; mask < (1 << num_of_variables_); mask++) {
       vector<double> trial(num_of_variables_);
@@ -195,11 +241,61 @@ class LPSolver {
   }
 
  private:
+  static PyObject* feasibility_func_;
+  static PyObject* sol_func_;
+
+  PyObject* CallCvxopt(PyObject* call_function) {
+    PyObject* p_args = PyTuple_New(2);
+
+    assert(!ineqs_.empty());
+    assert(!bounds_.empty());
+
+    PyTuple_SetItem(p_args, 0, PMatrixFromVector(ineqs_, "int"));
+    PyTuple_SetItem(p_args, 1, PListFromVector(bounds_, "int"));
+
+    PyObject* call_result = PyObject_CallObject(call_function, p_args);
+
+    Py_DECREF(p_args);
+
+    CheckPyObjectFailure(call_result);
+    return call_result;
+  }
+
+  static void CheckPyObjectFailure(PyObject* object) {
+    if (object == nullptr) {
+      PyErr_Print();
+      exit(1);
+    }
+  }
+
+  PyObject* PListFromVector(const vector<int>& nums, const string& type) {
+    PyObject* l = PyList_New(nums.size());
+    for (size_t i = 0; i < nums.size(); ++i) {
+      if (type == "double") {
+        PyList_SET_ITEM(l, i, PyFloat_FromDouble(nums[i]));
+      } else {
+        PyList_SET_ITEM(l, i, PyLong_FromLong(nums[i]));
+      }
+    }
+    return l;
+  }
+
+  PyObject* PMatrixFromVector(const vector<vector<int>>& matrix, const string& type) {
+    PyObject* l = PyList_New(matrix.size());
+    for (size_t i = 0; i < matrix.size(); ++i) {
+      PyList_SET_ITEM(l, i, PListFromVector(matrix[i], type));
+    }
+    return l;
+  }
+
   int num_of_variables_;
   vector<int> bounds_;
   vector<vector<int>> ineqs_;
   vector<double> last_sol_;
 };
+
+PyObject* LPSolver::feasibility_func_ = nullptr;
+PyObject* LPSolver::sol_func_ = nullptr;
 
 void PrintVec(const vector<int>& v) {
   for (size_t i = 0; i < v.size(); ++i) {
@@ -490,210 +586,6 @@ class NashDigraph {
         cout << " " << x;
       }
       cout << "\n\n";
-    }
-  };
-
-  struct PathPosets {
-    vector<vector<int>> graph;
-    vector<pair<int, int>> edges;
-    set<pair<int, int>> edges_set;
-
-    vector<int> block_sizes;
-
-    vector<int> dsu;
-    vector<pair<int, int>> dsu_history;
-    vector<int> set_size;
-    vector<pair<int, int>> set_size_history;
-
-    map<int64_t, int> path_idx_by_mask;
-    map<pair<int64_t, int64_t>, vector<pair<int, int>>> path_pairs;
-    int n, m;
-
-    PathPosets() = default;
-
-    PathPosets(const vector<LinearFunc>& paths, int edges_num) {
-      dsu.resize(paths.size());
-      set_size.resize(paths.size());
-      graph.resize(paths.size());
-
-      for (size_t i = 0; i < paths.size(); ++i) {
-        dsu[i] = i;
-        set_size[i] = 1;
-      }
-
-      int cur_path_idx = 0;
-      for (const auto& path : paths) {
-        if (path_idx_by_mask.count(path.edges_mask) > 0) {
-          continue;
-        }
-        path_idx_by_mask[path.edges_mask] = cur_path_idx++;
-      }
-
-      m = edges_num;
-
-      for (size_t i = 0; i < paths.size(); ++i) {
-        for (size_t j = 0; j < paths.size(); ++j) {
-          if (i == j) {
-            continue;
-          }
-
-          int i_idx = path_idx_by_mask[paths[i].edges_mask];
-          int j_idx = path_idx_by_mask[paths[j].edges_mask];
-
-          path_pairs[BuildPathDiff(paths[i], paths[j])].emplace_back(i_idx, j_idx);
-        }
-      }
-
-      n = cur_path_idx;
-    }
-
-    pair<int64_t, int64_t> BuildPathDiff(const LinearFunc& lhs, const LinearFunc& rhs) {
-      int64_t i_mask = 0;
-      int64_t j_mask = 0;
-      int64_t xor_edges_mask = (lhs.edges_mask ^ rhs.edges_mask);
-      for (int edge_idx = m - 1; edge_idx >= 0; --edge_idx) {
-        int is_active = (xor_edges_mask >> edge_idx) & 1LL;
-        if (!is_active) {
-          continue;
-        }
-        int i_active = (lhs.edges_mask >> edge_idx) & 1;
-        if (i_active) {
-          i_mask += (1LL << edge_idx);
-        } else {
-          j_mask += (1LL << edge_idx);
-        }
-      }
-      return make_pair(i_mask, j_mask);
-    }
-
-    size_t Size() {
-      return edges.size();
-    }
-
-    void Rollback() {
-      assert(!edges.empty());
-      assert(!dsu_history.empty());
-      assert(!set_size_history.empty());
-
-      int v = edges.back().first;
-      int u = edges.back().second;
-      edges.pop_back();
-      edges_set.erase(make_pair(v, u));
-
-      assert(!graph[v].empty());
-      graph[v].pop_back();
-
-      auto pair = dsu_history.back();
-      if (pair.first != -1) {
-        dsu[pair.first] = pair.second;
-      }
-      dsu_history.pop_back();
-
-      pair = set_size_history.back();
-      if (pair.first != -1) {
-        set_size[pair.first] = pair.second;
-      }
-      set_size_history.pop_back();
-    }
-
-    void dfs(int v, vector<bool>* is_vis) {
-      (*is_vis)[v] = true;
-      for (int u : graph[v]) {
-        if (!(*is_vis)[u]) {
-          dfs(u, is_vis);
-        }
-      }
-    }
-
-    bool HasPath(int v, int u) {
-      vector<bool> is_vis(n);
-      dfs(v, &is_vis);
-      return is_vis[u];
-    }
-
-    bool AddBlock(const LinearFunc& v_path, const LinearFunc& u_path) {
-      pair<int64_t, int64_t> path_diff = BuildPathDiff(v_path, u_path);
-
-      int cnt = 0;
-      bool is_ok = true;
-      const auto& pairs = path_pairs[path_diff];
-      for (const auto& edge : pairs) {
-        if (edges_set.count(edge) > 0) {
-          continue;
-        }
-        bool res = AddRawEdge(edge.first, edge.second);
-        cnt += res;
-        if (!res) {
-          is_ok = false;
-          break;
-        }
-      }
-      if (is_ok) {
-        block_sizes.emplace_back(cnt);
-        return true;
-      }
-      while (cnt > 0) {
-        --cnt;
-        Rollback();
-      }
-      return false;
-    }
-
-    void PopBlock() {
-      assert(!block_sizes.empty());
-      int cnt = block_sizes.back();
-      while (cnt > 0) {
-        Rollback();
-        cnt--;
-      }
-      block_sizes.pop_back();
-    }
-
-    bool AddEdge(const LinearFunc& v_path, const LinearFunc& u_path) {
-      int v = path_idx_by_mask[v_path.edges_mask];
-      int u = path_idx_by_mask[u_path.edges_mask];
-
-      return AddRawEdge(u, v);
-    }
-
-    int GetRoot(int v) {
-      if (v == dsu[v]) {
-        return v;
-      }
-      return GetRoot(dsu[v]);
-    }
-
-    bool JoinSets(int v, int u) {
-      v = GetRoot(v);
-      u = GetRoot(u);
-      if (v == u) {
-        return false;
-      }
-      if (set_size[v] > set_size[u]) {
-        swap(v, u);
-      }
-      dsu_history.emplace_back(v, dsu[v]);
-      dsu[v] = u;
-      set_size_history.emplace_back(v, set_size[v]);
-      set_size[v] += set_size[u];
-      return true;
-    }
-
-    bool AddRawEdge(int v, int u) {
-      bool is_joined = false;
-      // bool is_joined = JoinSets(v, u);
-      if (is_joined || !HasPath(u, v)) {
-        graph[v].emplace_back(u);
-        edges.emplace_back(v, u);
-        edges_set.insert(make_pair(v, u));
-
-        /* dumb history */
-        set_size_history.emplace_back(-1, -1);
-        dsu_history.emplace_back(-1, -1);
-
-        return true;
-      }
-      return false;
     }
   };
 
@@ -1154,7 +1046,7 @@ class NashDigraph {
   bool AddInequality(const LinearFunc& old_func,
                      const LinearFunc& new_func,
                      const SolverParameters& solver_params,
-                     PathPosets* path_posets) {
+                     LPSolver* lp_solver) {
     if (old_func.IsCycle() || new_func.IsCycle()) {
       if (solver_params.are_pay_costs_positive) {
         if (old_func.IsCycle()) {
@@ -1165,9 +1057,22 @@ class NashDigraph {
         }
         return false;
       }
+      if (old_func.IsCycle()) {
+        lp_solver->PushInequality(old_func.GetVectorizedCycle(num_of_edges_, -1), -1);  // c > 0
+      }
+      if (new_func.IsCycle()) {
+        lp_solver->PushInequality(new_func.GetVectorizedCycle(num_of_edges_, 1), -1);  // c < 0
+      }
       return true;
     }
-    return path_posets->AddBlock(old_func, new_func);
+    vector<int> ineq(num_of_edges_);
+    for (int edge_idx : new_func.acyclic_part) {
+      ineq[edge_idx] += 1;
+    }
+    for (int edge_idx : old_func.acyclic_part) {
+      ineq[edge_idx] -= 1;
+    }
+    return lp_solver->PushInequality(ineq, -1);
   }
 
   void UpdateMH(int player, int64_t edges_mask, int delta) {
@@ -1208,13 +1113,13 @@ class NashDigraph {
                      LPSolver* lp_x,
                      LPSolver* lp_y) {
     int n = is_cell_used->size();
+    size_t old_lp_size = lp_x->Size();
     // finding cell to improve for the first player
     for (int tx : col_classes_[cy]) {
       int64_t edges_mask = linear_funcs_by_cell[tx][cy].edges_mask;
       if (!CanAddMH(0, edges_mask)) {
         continue;
       }
-      size_t old_posets_size = path_posets_x_.Size();
       if (linear_funcs_by_cell[tx][cy] == linear_funcs_by_cell[cx][cy]) {
         continue;
       }
@@ -1224,10 +1129,10 @@ class NashDigraph {
         if (func_idx == tx) {
           continue;
         }
-        can_add_ineqs &= AddInequality(
-            linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, &path_posets_x_);
+        can_add_ineqs &=
+            AddInequality(linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, lp_x);
       }
-      if (can_add_ineqs) {
+      if (can_add_ineqs && lp_x->IsFeasible()) {
         vector<int> colored_cells;
         for (int wx = 0; wx < n; ++wx) {
           if (linear_funcs_by_cell[wx][cy] == linear_funcs_by_cell[tx][cy]) {
@@ -1250,8 +1155,8 @@ class NashDigraph {
         }
       }
 
-      while (path_posets_x_.Size() != old_posets_size) {
-        path_posets_x_.PopBlock();
+      while (lp_x->Size() != old_lp_size) {
+        lp_x->PopInequality();
       }
     }
     return false;
@@ -1265,13 +1170,14 @@ class NashDigraph {
                       LPSolver* lp_x,
                       LPSolver* lp_y) {
     int m = (*is_cell_used)[0].size();
+    size_t old_lp_size = lp_y->Size();
     // finding cell to improve for the second player
     for (int ty : row_classes_[cx]) {
       int64_t edges_mask = linear_funcs_by_cell[cx][ty].edges_mask;
       if (!CanAddMH(1, edges_mask)) {
         continue;
       }
-      size_t old_posets_size = path_posets_y_.Size();
+
       if (linear_funcs_by_cell[cx][ty] == linear_funcs_by_cell[cx][cy]) {
         continue;
       }
@@ -1281,8 +1187,8 @@ class NashDigraph {
         if (func_idx == ty) {
           continue;
         }
-        can_add_ineqs &= AddInequality(
-            linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, &path_posets_y_);
+        can_add_ineqs &=
+            AddInequality(linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, lp_y);
       }
       if (can_add_ineqs) {
         vector<int> colored_cells;
@@ -1306,8 +1212,8 @@ class NashDigraph {
           (*is_cell_used)[cx][colored_cell] = 0;
         }
       }
-      while (path_posets_y_.Size() != old_posets_size) {
-        path_posets_y_.PopBlock();
+      while (lp_y->Size() != old_lp_size) {
+        lp_y->PopInequality();
       }
     }
     return false;
@@ -1457,9 +1363,6 @@ class NashDigraph {
         flatten_lin_funcs.emplace_back(linear_funcs_by_cell[cx][cy]);
       }
     }
-
-    path_posets_x_ = PathPosets(flatten_lin_funcs, num_of_edges_);
-    path_posets_y_ = path_posets_x_;
 
     vector<vector<int>> is_pair_of_strategies_used(n, vector<int>(m));
     int sx = -1, sy = -1;
@@ -1845,12 +1748,6 @@ class NashDigraph {
     int sign;        // 0, 1
   };
 
-  PathPosets path_posets_x_, path_posets_y_;
-
-  vector<HalfCycle> half_cycles_cx_, half_cycles_cy_;
-  vector<vector<vector<HalfCycleVar>>> best_choice_hcycles_x_;
-  vector<vector<vector<HalfCycleVar>>> best_choice_hcycles_y_;
-
   unordered_map<int64_t, int> MH[2];  // Set of edges mask which are currently fixed in bruteforce as best in row/col
   unordered_map<int64_t, vector<int>> cords_by_edges_mask[2];  // Set of complimentary coords for row/cols
   vector<int> MH_cov[2];  // Number of MH strategies for player X in row/column Y is MH_cov[X][Y]
@@ -2019,6 +1916,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int nghbr_mask = choice_to_build_path[vertex_in_path];
 
+    /*
     if (vertex_in_path <= 2) {  // a -> b, b -> e, e -> f prefix
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
@@ -2026,8 +1924,8 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
         return false;
       }
     }
+    */
 
-    /*
     if (vertex_in_path == 1) {  // a -> b, a -> e case
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
@@ -2035,7 +1933,6 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
         return false;
       }
     }
-    */
 
     for (int next_vertex_num = vertex_in_path + 1; next_vertex_num < path_size; ++next_vertex_num) {
       int bit_pos = path_size - next_vertex_num - 1;
@@ -2072,7 +1969,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
       }
     }
   }
-  if (num_of_outs > 3) {
+  if (num_of_outs > 4) {
     return false;
   }
   for (int cycle_vertex = 0; cycle_vertex < cycle_size; ++cycle_vertex) {
@@ -2245,7 +2142,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
       }
     }
   }
-  size_t num_of_threads = std::thread::hardware_concurrency();
+  size_t num_of_threads = 1;  // std::thread::hardware_concurrency();
   cerr << "Num of threads: " << num_of_threads << endl;
 
   cerr << "Total num of graphs: " << total_num_of_graphs << endl;
@@ -2492,6 +2389,24 @@ void TestIsomoprhicChecker() {
 int main() {
   LPSolver::LaunchPython();
 
+  /*
+  std::mutex log_mutex;
+  auto solver_params = SolverParameters{.are_pay_costs_positive = true,
+                                        .is_special_six_cycle_len_graph = false,
+                                        .left_path_len_bound = 3,
+                                        .right_path_len_bound = 3,
+                                        .cycle_size = 6,
+                                        .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 3}, {0, 3}, {0, 3}},
+                                        .offset_filename = "offset.txt",
+                                        .should_shuffle_graphs = true,
+                                        .need_to_remove_one_strategy = false,
+                                        .log_mutex = &log_mutex};
+  NashDigraph G("input.txt", false);
+  G.Preprocess(solver_params);
+  G.CalcImprovementsTable(solver_params);
+  std::cout << G.SolveTwoPlayersCosts(solver_params) << std::endl;
+  */
+
   // CheckTreeTests();
   // CheckNegativeCostsTests();
   // CheckTreeTests();
@@ -2520,7 +2435,7 @@ int main() {
     if (it % 100 == 0) {
       cerr << it << endl;
     }
-    */
+
   /*
  NashDigraph G("input.txt", true);
  auto f1 = G.CheckHypo(0);
@@ -2547,8 +2462,8 @@ int main() {
 
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = false,
-                                         .left_path_len_bound = 4,
-                                         .right_path_len_bound = 4,
+                                         .left_path_len_bound = 3,
+                                         .right_path_len_bound = 3,
                                          .cycle_size = 6,
                                          .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 3}, {0, 3}, {0, 3}},
                                          .offset_filename = "offset.txt",
