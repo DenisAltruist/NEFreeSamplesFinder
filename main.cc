@@ -729,11 +729,11 @@ class NashDigraph {
 
   // For this constructor edges should be added manually
   NashDigraph(const vector<int>& turns, int num_of_players, size_t start_vertex)
-      : turns_(turns),
-        edges_(vector<vector<Edge>>(turns.size())),
-        start_vertex_(start_vertex),
-        num_of_players_(num_of_players),
-        num_of_edges_(0) {
+    : turns_(turns),
+      edges_(vector<vector<Edge>>(turns.size())),
+      start_vertex_(start_vertex),
+      num_of_players_(num_of_players),
+      num_of_edges_(0) {
   }
 
   void Preprocess(const SolverParameters& solver_params) {
@@ -1072,7 +1072,7 @@ class NashDigraph {
       for (size_t player_idx = 0; player_idx < num_of_players_; ++player_idx) {
         size_t strategy_for_cur_player_to_use_idx = strategy_cortege[player_idx];
         const vector<int>& cur_player_strategy =
-            all_possible_players_strategies_[player_idx][strategy_for_cur_player_to_use_idx];
+          all_possible_players_strategies_[player_idx][strategy_for_cur_player_to_use_idx];
         ApplyPlayerStrategyToGlobalOne(cur_player_strategy, player_idx, &all_players_strategy);
       }
       bool is_strategy_ne = IsStrategyNE(all_players_strategy);
@@ -1225,7 +1225,7 @@ class NashDigraph {
           continue;
         }
         can_add_ineqs &= AddInequality(
-            linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, &path_posets_x_);
+          linear_funcs_by_cell[func_idx][cy], linear_funcs_by_cell[tx][cy], solver_params, &path_posets_x_);
       }
       if (can_add_ineqs) {
         vector<int> colored_cells;
@@ -1240,7 +1240,7 @@ class NashDigraph {
         }
         UpdateMH(0, edges_mask, 1);
         bool branch_result =
-            SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, tx, cy, 1, is_cell_used, lp_x, lp_y);
+          SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, tx, cy, 1, is_cell_used, lp_x, lp_y);
         if (branch_result) {
           return true;
         }
@@ -1282,7 +1282,7 @@ class NashDigraph {
           continue;
         }
         can_add_ineqs &= AddInequality(
-            linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, &path_posets_y_);
+          linear_funcs_by_cell[cx][func_idx], linear_funcs_by_cell[cx][ty], solver_params, &path_posets_y_);
       }
       if (can_add_ineqs) {
         vector<int> colored_cells;
@@ -1297,7 +1297,7 @@ class NashDigraph {
         }
         UpdateMH(1, edges_mask, 1);
         bool branch_result =
-            SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, cx, ty, 0, is_cell_used, lp_x, lp_y);
+          SolveTwoPlayersCostsRec(linear_funcs_by_cell, solver_params, cx, ty, 0, is_cell_used, lp_x, lp_y);
         if (branch_result) {
           return true;
         }
@@ -1485,7 +1485,7 @@ class NashDigraph {
     LPSolver lp_y = ConfigureBaseLP(1, solver_params);
 
     return SolveTwoPlayersCostsRec(
-        linear_funcs_by_cell, solver_params, sx, sy, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
+      linear_funcs_by_cell, solver_params, sx, sy, -1, &is_pair_of_strategies_used, &lp_x, &lp_y);
   }
 
   void Dfs(int cur_vertex, vector<int>* is_vertex_visited) {
@@ -1781,12 +1781,12 @@ class NashDigraph {
     };
 
     std::sort(
-        outcomes.begin(), outcomes.end(), [&](const vector<Outcome>& lhs_str, const vector<Outcome>& rhs_str) -> bool {
-          int x;
-          int lhs_mn = calc_mn(lhs_str, &x);
-          int rhs_mn = calc_mn(rhs_str, &x);
-          return lhs_mn < rhs_mn;
-        });
+      outcomes.begin(), outcomes.end(), [&](const vector<Outcome>& lhs_str, const vector<Outcome>& rhs_str) -> bool {
+        int x;
+        int lhs_mn = calc_mn(lhs_str, &x);
+        int rhs_mn = calc_mn(rhs_str, &x);
+        return lhs_mn < rhs_mn;
+      });
 
     auto get_lex_code = [&](int idx) -> vector<int> {
       vector<int> code(num_of_outcomes);
@@ -2018,7 +2018,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   bool is_bipartite = true;
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int nghbr_mask = choice_to_build_path[vertex_in_path];
-
+    /*
     if (vertex_in_path <= 2) {  // a -> b, b -> e, e -> f prefix
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
@@ -2026,6 +2026,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
         return false;
       }
     }
+    */
 
     /*
     if (vertex_in_path == 1) {  // a -> b, a -> e case
@@ -2072,7 +2073,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
       }
     }
   }
-  if (num_of_outs > 3) {
+  if (num_of_outs > 4) {
     return false;
   }
   for (int cycle_vertex = 0; cycle_vertex < cycle_size; ++cycle_vertex) {
@@ -2199,7 +2200,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
     cerr << "Start generating something new" << endl;
     vector<int> path_to_cycle_edges_ways_limits(path_size, (1 << solver_params.cycle_size));
     choices_to_connect_with_cycle =
-        GenAllPossibleChoicesForMasks(path_to_cycle_edges_ways_limits, solver_params.num_of_edges_to_cycle_bounds);
+      GenAllPossibleChoicesForMasks(path_to_cycle_edges_ways_limits, solver_params.num_of_edges_to_cycle_bounds);
 
     cerr << "All possible cycle outs are generated" << endl;
 
@@ -2223,7 +2224,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
         GraphId cur_graph_id{solver_params.cycle_size, path_size, build_path_choice_idx, cycle_choice_idx};
         NashDigraph G;
         bool should_use =
-            BuildNashDigraphByGraphId(cur_graph_id, choices_to_build_path, choices_to_connect_with_cycle, &G);
+          BuildNashDigraphByGraphId(cur_graph_id, choices_to_build_path, choices_to_connect_with_cycle, &G);
         if (!should_use) {
           continue;
         }
@@ -2543,13 +2544,33 @@ int main() {
   // CheckTreeTests();
   // CheckNegativeCostsTests();
 
+  /*
+  NashDigraph G("input.txt", false);
+
   std::mutex log_mutex;
 
+  auto solver_params = SolverParameters{.are_pay_costs_positive = true,
+                                        .is_special_six_cycle_len_graph = false,
+                                        .left_path_len_bound = 2,
+                                        .right_path_len_bound = 2,
+                                        .cycle_size = 8,
+                                        .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 3}, {0, 3}, {0, 3}},
+                                        .offset_filename = "offset.txt",
+                                        .should_shuffle_graphs = true,
+                                        .need_to_remove_one_strategy = false,
+                                        .log_mutex = &log_mutex};
+
+  G.Preprocess(solver_params);
+  G.CalcImprovementsTable(solver_params);
+  cout << G.SolveTwoPlayersCosts(solver_params) << endl;
+  */
+
+  std::mutex log_mutex;
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = false,
-                                         .left_path_len_bound = 4,
-                                         .right_path_len_bound = 4,
-                                         .cycle_size = 6,
+                                         .left_path_len_bound = 2,
+                                         .right_path_len_bound = 2,
+                                         .cycle_size = 8,
                                          .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 3}, {0, 3}, {0, 3}},
                                          .offset_filename = "offset.txt",
                                          .should_shuffle_graphs = true,
