@@ -2246,6 +2246,7 @@ bool TryToSolve(const SolverParameters& solver_params) {
       }
     }
   }
+
   size_t num_of_threads = std::thread::hardware_concurrency();
   cerr << "Num of threads: " << num_of_threads << endl;
 
@@ -2257,7 +2258,19 @@ bool TryToSolve(const SolverParameters& solver_params) {
 
   ThreadQueue tq;
 
+  ifstream done_in("done_ids.log");
+  assert(done_in.is_open());
+
+  int x;
+  set<int> ready_ids;
+  while (done_in >> x) {
+    ready_ids.insert(x);
+  }
+
   for (size_t job_id = 0; job_id < graphs_to_check.size(); ++job_id) {
+    if (ready_ids.count(job_id) > 0) {
+      continue;
+    }
     jobs.emplace_back(pool.push(CheckNashDigraphSample,
                                 std::cref(solver_params),
                                 job_id,
