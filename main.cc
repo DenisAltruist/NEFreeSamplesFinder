@@ -2019,6 +2019,15 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
   for (int vertex_in_path = 0; vertex_in_path < path_size; ++vertex_in_path) {
     int nghbr_mask = choice_to_build_path[vertex_in_path];
     /*
+    if (vertex_in_path <= 1) {  // a -> b, b -> e prefix
+      int bit_pos = path_size - (vertex_in_path + 1) - 1;
+      int next_bit = (nghbr_mask >> bit_pos);
+      if (!next_bit) {
+        return false;
+      }
+    }
+    */
+    /*
     if (vertex_in_path <= 2) {  // a -> b, b -> e, e -> f prefix
       int bit_pos = path_size - (vertex_in_path + 1) - 1;
       int next_bit = (nghbr_mask >> bit_pos);
@@ -2073,7 +2082,7 @@ bool BuildNashDigraphByGraphId(const GraphId& graph_id,
       }
     }
   }
-  if (num_of_outs > 4) {
+  if (num_of_outs > 3) {
     return false;
   }
   for (int cycle_vertex = 0; cycle_vertex < cycle_size; ++cycle_vertex) {
@@ -2249,8 +2258,6 @@ bool TryToSolve(const SolverParameters& solver_params) {
 
   size_t num_of_threads = std::thread::hardware_concurrency();
   cerr << "Num of threads: " << num_of_threads << endl;
-
-  cerr << "Total num of graphs: " << total_num_of_graphs << endl;
 
   ctpl::thread_pool pool(num_of_threads);
 
@@ -2581,8 +2588,8 @@ int main() {
   std::mutex log_mutex;
   bool res = TryToSolve(SolverParameters{.are_pay_costs_positive = true,
                                          .is_special_six_cycle_len_graph = false,
-                                         .left_path_len_bound = 2,
-                                         .right_path_len_bound = 2,
+                                         .left_path_len_bound = 3,
+                                         .right_path_len_bound = 3,
                                          .cycle_size = 8,
                                          .num_of_edges_to_cycle_bounds = {{1, 6}, {0, 3}, {0, 3}, {0, 3}},
                                          .offset_filename = "offset.txt",
